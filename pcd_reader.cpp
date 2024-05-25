@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <chrono>
 #include "omp.h"
 
 namespace py = pybind11;
@@ -342,10 +343,64 @@ void save_MAP_pcd(py::array_t<float> &coords,
     pcl::io::savePCDFileBinary(filename, cloud);
 }
 
+void ground_plane_fitting(const pcl::PointCloud<PointMAP>&source_points, 
+                          pcl::PointCloud<PointMAP>::Ptr& ground_points)
+{
+    // 1.Sort on Z-axis value.
+    pcl::PointCloud<PointMAP>::Ptr source_points_snapshot (new pcl::PointCloud<PointMAP>);
+    source_points_snapshot->points.reserve(source_points.points.size());
+    std::copy_if(source_points.points.begin(), source_points.points.end(), std::back_inserter(source_points_snapshot->points), [&](const PointMAP& p) {
+      return p.z < 1.0;
+    });
+    if (source_points_snapshot->points.size() < 100) {
+        return;
+    }
+    std::sort(source_points_snapshot->points.begin(), source_points_snapshot->points.end(), [](const PointMAP& a, const PointMAP& b) {
+        return a.z < b.z;
+    });
+    // 2. choose 100 lowest points as init ground seeds.
+    pcl::PointCloud<PointMAP>::Ptr initial_seeds(new pcl::PointCloud<PointMAP>());
+    std::copy_n(source_points_snapshot->points.begin(), 100, std::back_inserter(initial_seeds->points));
+    std::cout << "pcd_map_snapshot size: " << source_points_snapshot->points.size() << std::endl;
+    std::cout << "initial seeds size: " << initial_seeds->points.size() << std::endl;
+    int num_iter = 100;
+    Eigen::MatrixXf normal;
+    float d, th_dist_d;
+    float th_dist = 0.3;
+    for (int i = 0; i < num_iter; ++i) {
+        // 3. estimate_plane
+        Eigen::Matrix3f cov;
+        Eigen::Vector4f pc_mean;
+        pcl::computeMeanAndCovarianceMatrix(*initial_seeds, cov, pc_mean);
+        Eigen::JacobiSVD<Eigen::MatrixXf> svd(cov, Eigen::DecompositionOptions::ComputeFullU);
+        normal = (svd.matrixU().col(2));
+        // mean ground seeds value
+        Eigen::Vector3f seeds_mean = pc_mean.head<3>();
+        d = -(normal.transpose() * seeds_mean)(0, 0);
+        // set distance threhold to `th_dist - d`
+        th_dist_d = th_dist - d;
+
+        Eigen::MatrixXf points_matrix(source_points_snapshot->points.size(), 3);
+        int j = 0;
+        #pragma omp parallel for
+        for (auto p : source_points_snapshot->points) {
+            points_matrix.row(j++) << p.x, p.y, p.z;
+        }
+        Eigen::VectorXf result = points_matrix * normal;
+        #pragma omp parallel for
+        for (size_t r = 0; r < result.rows(); ++r) {
+            if (result[r] < th_dist_d) {
+                ground_points->points.emplace_back(source_points_snapshot->points[r]);
+            }
+        }
+    }
+}
+
 void generate_whole_map(std::vector<std::string> &pcd_pth,
                         float save_ratio,
-                        const std::string &filename) {
+                        const std::string &filename, const std::string &ground_map_file) {
     pcl::PointCloud<PointMAP>::Ptr final_cloud (new pcl::PointCloud<PointMAP>);
+    pcl::PointCloud<PointMAP>::Ptr final_ground_cloud (new pcl::PointCloud<PointMAP>);
     for(size_t pcd_i=0; pcd_i<pcd_pth.size(); ++pcd_i){
         pcl::PointCloud<PointMAP>::Ptr cloud (new pcl::PointCloud<PointMAP>);
         if (pcl::io::loadPCDFile<PointMAP>(pcd_pth[pcd_i], *cloud) == -1) {
@@ -379,9 +434,14 @@ void generate_whole_map(std::vector<std::string> &pcd_pth,
         *final_cloud += DScloud;
         if(pcd_i % 10 == 0)
             std::cout<<pcd_i+1<<"/"<<pcd_pth.size()<<", ";
+        
+        pcl::PointCloud<PointMAP>::Ptr ground_cloud (new pcl::PointCloud<PointMAP>);
+        ground_plane_fitting(DScloud, ground_cloud);
+        *final_ground_cloud += *ground_cloud;
     }
 
     pcl::io::savePCDFileBinary(filename, *final_cloud);
+    pcl::io::savePCDFileBinary(ground_map_file, *final_ground_cloud);
 }
 
 void stretchContrast98(cv::Mat& image) {
@@ -442,10 +502,12 @@ cv::Mat stretchContrast98_float(const std::vector<std::vector<float>> &image,
 }
 
 void generate_2d_map(const std::string &pcd_filename,
+                     const std::string &ground_map_file,
                      py::array_t<float> &ranges,
                      double resolution,
                      const std::string &img_rgb,
                      const std::string &img_intensity,
+                     const std::string &ground_img_intensity,
                      const std::string &height_data,
                      const std::string &origin_point){
     pcl::PointCloud<PointMAP>::Ptr cloud (new pcl::PointCloud<PointMAP>);
@@ -503,6 +565,37 @@ void generate_2d_map(const std::string &pcd_filename,
             }
         }
     }
+
+    auto start = std::chrono::system_clock::now();
+    pcl::PointCloud<PointMAP>::Ptr ground_cloud (new pcl::PointCloud<PointMAP>);
+    if (pcl::io::loadPCDFile<PointMAP> (ground_map_file, *ground_cloud) == -1){
+        throw std::runtime_error("无法读取PCD文件, 请检查路径! " + ground_map_file);
+        return;
+    }
+    std::vector<std::vector<float>> ground_grid(grid_height, std::vector<float>(grid_width, 0.0));
+    size_t valid_pixel_idx(0);
+    for (const auto& point : ground_cloud->points) {
+        int x_index = int((point.x - min_x) / grid_resolution);
+        int y_index = int((point.y - min_y) / grid_resolution);
+        // Check if the indices are within the grid bounds
+        if (x_index >= 0 && x_index < grid_width && y_index >= 0 && y_index < grid_height) {
+            if(ground_grid[y_index][x_index]==0.0){
+                valid_pixel_idx++;
+                if (point.intensity > 50) 
+                    ground_grid[y_index][x_index] = 255;
+                else
+                    ground_grid[y_index][x_index] = point.intensity;
+            }else{
+                ground_grid[y_index][x_index] = std::max(ground_grid[y_index][x_index], point.intensity);
+            }
+        }
+    }
+    cv::Mat ground_intensity_mat = stretchContrast98_float(ground_grid, valid_pixel_idx, 0.03);
+    cv::Mat colormapped_ground_intensity;
+    cv::applyColorMap(ground_intensity_mat, colormapped_ground_intensity, cv::COLORMAP_PARULA);
+    cv::imwrite(ground_img_intensity, colormapped_ground_intensity);
+    auto end = std::chrono::system_clock::now();
+    std::cout << pcd_filename.c_str() << " ground plane fitting: "<< (double)(end - start).count() / 1000000 << "ms" << std::endl;
 
     cv::Mat intensity_mat = stretchContrast98_float(intensity_grid, valid_pixel_c, 0.03);
     cv::Mat colormapped_intensity;
@@ -597,4 +690,6 @@ PYBIND11_MODULE(imo_pcd_reader, m) {
     m.def("assign_colors", &assign_colors, "Assign colors for point cloud from images");
     m.def("generate_whole_map", &generate_whole_map, "Downsample and concatenate multiple frames pcd to generate the whole map");
     m.def("generate_2d_map", &generate_2d_map, "Generate X-Y palne 2d map from the whole map for labeling");
+    m.def("ground_plane_fitting", &ground_plane_fitting, "ground plane fitting");
+    
 }
