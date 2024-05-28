@@ -8,6 +8,7 @@ import argparse
 import glob
 import logging
 from joblib import Parallel, delayed
+from datetime import datetime
 
 import numpy as np
 np.set_printoptions(precision=4)
@@ -394,3 +395,20 @@ for scan_paths in pcd_segments:
             writer.writerow(["File Path"])
             for path in scan_paths:
                 writer.writerow([path])
+        
+        scan_ts = []
+        for scan_path in scan_paths:
+            filename = os.path.basename(scan_path)
+            parts = filename.split('_')
+            query_datetime = parts[0] + '_' + parts[1]
+            query_dt = datetime.strptime(query_datetime, '%Y%m%d_%H%M%S%f')
+            seconds = query_dt.timestamp()
+            nanoseconds = int(query_dt.microsecond * 1e3)
+            scan_ts.append(int(seconds * 1e9) + nanoseconds)
+        
+        timestamp_pose_csv = os.path.join(save_dir, "timestamp_pose.csv")
+        with open(timestamp_pose_csv, "w", newline="") as csvfile:  # Open in write mode
+            writer = csv.writer(csvfile)
+            for for_idx, ts in enumerate(scan_ts):
+                writer.writerow([ts] + final_pose_list[for_idx, :].tolist())
+
