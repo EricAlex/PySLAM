@@ -181,7 +181,7 @@ save_ratio = 0.3
 imo_pcd_reader.generate_whole_map(pcd_list, save_ratio, whole_map_dir, whole_ground_map_dir)
 
 # generate 2d map for labeling
-resolution = 0.05
+resolution = 0.02
 mapdir, mapfilename = os.path.split(whole_map_dir)
 img_rgb = os.path.join(mapdir, fname_prefix + "_rgb.png")
 img_intensity = os.path.join(mapdir, fname_prefix + "_intensity.png")
