@@ -215,7 +215,10 @@ if not args.keep_mid_pcds:
 
     try:
         os.remove(whole_map_dir)
+        os.remove(whole_ground_map_dir)
     except FileNotFoundError:
         print(f"File not found: {whole_map_dir}")
+        print(f"File not found: {whole_ground_map_dir}")
     except PermissionError:
         print(f"Permission denied: {whole_map_dir}")
+        print(f"Permission denied: {whole_ground_map_dir}")
