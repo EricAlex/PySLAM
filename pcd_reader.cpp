@@ -635,6 +635,7 @@ void generate_2d_map(const std::string &pcd_filename,
                      const std::string &img_intensity,
                      const std::string &ground_img_intensity,
                      const std::string &height_data,
+                     const std::string &ground_height_data,
                      const std::string &origin_point){
     pcl::PointCloud<PointMAP>::Ptr cloud (new pcl::PointCloud<PointMAP>);
     if (pcl::io::loadPCDFile<PointMAP> (pcd_filename, *cloud) == -1){
@@ -692,13 +693,13 @@ void generate_2d_map(const std::string &pcd_filename,
         }
     }
 
-    auto start = std::chrono::system_clock::now();
     pcl::PointCloud<PointMAP>::Ptr ground_cloud (new pcl::PointCloud<PointMAP>);
     if (pcl::io::loadPCDFile<PointMAP> (ground_map_file, *ground_cloud) == -1){
         throw std::runtime_error("无法读取PCD文件, 请检查路径! " + ground_map_file);
         return;
     }
     std::vector<std::vector<float>> ground_grid(grid_height, std::vector<float>(grid_width, 0.0));
+    std::vector<std::vector<float>> ground_height_grid(grid_height, std::vector<float>(grid_width, 0.0));
     size_t valid_pixel_idx(0);
     for (const auto& point : ground_cloud->points) {
         int x_index = int((point.x - min_x) / grid_resolution);
@@ -718,8 +719,6 @@ void generate_2d_map(const std::string &pcd_filename,
     cv::Mat colormapped_ground_intensity;
     cv::applyColorMap(ground_intensity_mat, colormapped_ground_intensity, cv::COLORMAP_PARULA);
     cv::imwrite(ground_img_intensity, colormapped_ground_intensity);
-    auto end = std::chrono::system_clock::now();
-    std::cout << pcd_filename.c_str() << " ground plane fitting: "<< (double)(end - start).count() / 1000000 << "ms" << std::endl;
 
     cv::Mat intensity_mat = stretchContrast98_float(intensity_grid, valid_pixel_c, 0.03);
     cv::Mat colormapped_intensity;
@@ -748,6 +747,23 @@ void generate_2d_map(const std::string &pcd_filename,
         csvFile.close();
     } else {
         throw std::runtime_error("无法写文件, 请检查路径! " + height_data);
+        return;
+    }
+
+    csvFile.open(ground_height_data);
+    if (csvFile.is_open()) {
+        for (const auto& row : ground_height_grid) {
+            for (size_t i = 0; i < row.size(); ++i) {
+                csvFile << row[i];
+                if (i != row.size() - 1) {
+                    csvFile << ",";
+                }
+            }
+            csvFile << "\n";
+        }
+        csvFile.close();
+    } else {
+        throw std::runtime_error("无法写文件, 请检查路径! " + ground_height_data);
         return;
     }
 

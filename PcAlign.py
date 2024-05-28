@@ -181,14 +181,15 @@ save_ratio = 0.3
 imo_pcd_reader.generate_whole_map(pcd_list, save_ratio, whole_map_dir, whole_ground_map_dir)
 
 # generate 2d map for labeling
-resolution = 0.05
+resolution = 0.02
 mapdir, mapfilename = os.path.split(whole_map_dir)
 img_rgb = os.path.join(mapdir, fname_prefix + "_rgb.png")
 img_intensity = os.path.join(mapdir, fname_prefix + "_intensity.png")
 ground_img_intensity = os.path.join(mapdir, fname_prefix + "_ground_intensity.png")
 height_data = os.path.join(mapdir, fname_prefix + "_height.csv")
+ground_height_data = os.path.join(mapdir, fname_prefix + "_ground_height.csv")
 origin_point = os.path.join(mapdir, fname_prefix + "_origin_point.csv")
-imo_pcd_reader.generate_2d_map(whole_map_dir, whole_ground_map_dir, g_range, resolution, img_rgb, img_intensity, ground_img_intensity, height_data, origin_point)
+imo_pcd_reader.generate_2d_map(whole_map_dir, whole_ground_map_dir, g_range, resolution, img_rgb, img_intensity, ground_img_intensity, height_data, ground_height_data, origin_point)
 
 pcs_data_path = os.path.join(mapdir, fname_prefix + "_pcs_data_path.csv")
 local2global_pose = os.path.join(mapdir, fname_prefix + "_local2global_pose.csv")
