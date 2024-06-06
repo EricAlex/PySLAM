@@ -121,19 +121,16 @@ class IMUPose:
         self.timestamp_field = 'Gnss Posix'
 
     def getGPS(self, query_datetime):
-        query_dt = datetime.strptime(query_datetime, '%Y%m%d_%H%M%S%f')
-        query_timestamp = datetime_to_timestamp(query_dt)
-        index, query_entry = self.find_closest_entry(query_timestamp)
+        query_timestamp = datetime_to_timestamp(query_datetime)
+        index ,query_entry = self.find_closest_entry(query_timestamp)
         if query_entry is not None:
             return query_entry['Latitude[°]'], query_entry['Longitude[°]'], query_entry['Altitude[m]']
         else:
             return None, None, None
 
     def getIMUInfo(self, ref_datetime, query_datetime):
-        ref_dt = datetime.strptime(ref_datetime, '%Y%m%d_%H%M%S%f')
-        query_dt = datetime.strptime(query_datetime, '%Y%m%d_%H%M%S%f')
-        ref_timestamp = datetime_to_timestamp(ref_dt)
-        query_timestamp = datetime_to_timestamp(query_dt)
+        ref_timestamp = datetime_to_timestamp(ref_datetime)
+        query_timestamp = datetime_to_timestamp(query_datetime)
         start_index, ref_entry = self.find_closest_entry(ref_timestamp)
         end_index, query_entry = self.find_closest_entry(query_timestamp)
 
@@ -174,8 +171,7 @@ class IMUPose:
 
             scan_period = 0.1
             T = np.eye(4)  # Initialize as identity matrix
-            quat_t = np.array([1, gyro_x_mean * scan_period / 2, gyro_y_mean * scan_period / 2, gyro_z_mean * scan_period / 2])
-            quaternion = np.array([0.70710678, 0, 0, 0.70710678])
+            quaternion = np.array([1, gyro_x_mean * scan_period / 2, gyro_y_mean * scan_period / 2, gyro_z_mean * scan_period / 2])
             rot = R.from_quat(quaternion)
             rotation_matrix = rot.as_matrix()
             T[:3, :3] = rotation_matrix
@@ -184,10 +180,8 @@ class IMUPose:
             return None
 
     def getTransformationMatrix(self, ref_datetime, query_datetime):
-        ref_dt = datetime.strptime(ref_datetime, '%Y%m%d_%H%M%S%f')
-        query_dt = datetime.strptime(query_datetime, '%Y%m%d_%H%M%S%f')
-        ref_timestamp = datetime_to_timestamp(ref_dt)
-        query_timestamp = datetime_to_timestamp(query_dt)
+        ref_timestamp = datetime_to_timestamp(ref_datetime)
+        query_timestamp = datetime_to_timestamp(query_datetime)
         ref_index, ref_entry = self.find_closest_entry(ref_timestamp)
         query_index, query_entry = self.find_closest_entry(query_timestamp)
         if ref_entry is not None and query_entry is not None:
@@ -248,7 +242,7 @@ class IMUPose:
             if abs(after[self.timestamp_field] - timestamp) < self.timestamp_th:
                 return closest_index, after
             else:
-                return None
+                return None, None
 
     def _gps_to_enu(self, lat0, lon0, h0, lat, lon, h):
         # Convert degrees to radians
