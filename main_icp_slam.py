@@ -8,6 +8,7 @@ import argparse
 import glob
 import logging
 from joblib import Parallel, delayed
+from datetime import datetime
 
 import numpy as np
 np.set_printoptions(precision=4)
@@ -62,6 +63,14 @@ def setup_logging(log_file):
     )
     print(f"Logs are being saved to: {log_file}")
 
+def filename_2_timestamp(filename):
+    parts = filename.split('_')
+    query_datetime = parts[0] + '_' + parts[1][:-3]  # Slice to remove the last 3 digits (milliseconds)
+    query_dt = datetime.strptime(query_datetime, '%Y%m%d_%H%M%S') 
+    seconds = query_dt.timestamp()
+    milliseconds = int(parts[1][-3:])
+    return int(seconds * 1e9) + milliseconds * 1e6
+
 dataset_dir = os.path.abspath(os.path.join(args.data_base_dir, os.pardir))
 log_dir = os.path.join("result", os.path.basename(dataset_dir))
 if not os.path.exists(log_dir): os.makedirs(log_dir)
@@ -114,13 +123,13 @@ for index, scene_n in enumerate(scene_names):
             continue
         next_pcd_names.sort()
         next_pcd_paths = [os.path.join(next_dir, name) for name in next_pcd_names]
-        this_end_dt = IMU.pcd_name_2_dt(pcd_paths[-1])
-        next_begin_dt = IMU.pcd_name_2_dt(next_pcd_paths[0])
-        delta_dt = next_begin_dt - this_end_dt
-        if delta_dt.total_seconds() < 0 or delta_dt.total_seconds() > time_break_th:
+        this_end_dt = IMU.datetime_to_timestamp(os.path.basename(pcd_paths[-1]))
+        next_begin_dt = IMU.datetime_to_timestamp(os.path.basename(next_pcd_paths[0]))
+        delta_dt_seconds = float(next_begin_dt - this_end_dt)/1e9
+        if delta_dt_seconds < 0 or delta_dt_seconds > time_break_th:
             if len(tmp_seg) > min_frame_th:
                 pcd_segments.append(tmp_seg)
-                logging.info(f"Segment {len(pcd_segments)}, length: {len(tmp_seg)}, time gap: {delta_dt.total_seconds()} seconds")
+                logging.info(f"Segment {len(pcd_segments)}, length: {len(tmp_seg)}, time gap: {delta_dt_seconds} seconds")
             tmp_seg = []
 
 parent_base_dir = os.path.abspath(os.path.join(args.data_base_dir, os.pardir))
@@ -395,3 +404,12 @@ for scan_paths in pcd_segments:
             writer.writerow(["File Path"])
             for path in scan_paths:
                 writer.writerow([path])
+        
+        scan_ts = [IMU.datetime_to_timestamp(os.path.basename(scan_path)) for scan_path in scan_paths]
+        
+        timestamp_pose_csv = os.path.join(save_dir, "timestamp_pose.csv")
+        with open(timestamp_pose_csv, "w", newline="") as csvfile:  # Open in write mode
+            writer = csv.writer(csvfile)
+            for for_idx, ts in enumerate(scan_ts):
+                writer.writerow([ts] + final_pose_list[for_idx, :].tolist())
+

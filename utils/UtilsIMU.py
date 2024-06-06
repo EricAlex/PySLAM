@@ -7,12 +7,6 @@ from datetime import datetime
 import time
 from scipy.spatial.transform import Rotation as R
 
-def pcd_name_2_dt(pcd_path):
-    dirname, filename = os.path.split(pcd_path)
-    parts = filename.split('_')
-    query_timestamp = parts[0] + '_' + parts[1]
-    return datetime.strptime(query_timestamp, '%Y%m%d_%H%M%S%f')
-
 def matrix_to_euler(matrix):
     """
     Extracts yaw, pitch, and roll angles from a transformation matrix.
@@ -111,10 +105,13 @@ def create_transformation_matrix(yaw, pitch, roll, x, y, z):
 
     return T
 
-def datetime_to_timestamp(dt):
-    seconds = dt.timestamp()
-    nanoseconds = int(dt.microsecond * 1e3)
-    return int(seconds * 1e9) + nanoseconds
+def datetime_to_timestamp(dt_name):
+    parts = dt_name.split('_')
+    query_datetime = parts[0] + '_' + parts[1][:-3]  # Slice to remove the last 3 digits (milliseconds)
+    query_dt = datetime.strptime(query_datetime, '%Y%m%d_%H%M%S') 
+    seconds = query_dt.timestamp()
+    milliseconds = int(parts[1][-3:])
+    return int(seconds * 1e9) + milliseconds * 1e6
 
 class IMUPose:
     def __init__(self, csv_file_path):
@@ -211,7 +208,7 @@ class IMUPose:
             enu2ref = create_rotation_matrix(ref_entry['Orientation[°]'], ref_entry['Pitch angle[°]'], ref_entry['Roll angle[°]'])
             ref_speed = 5/18 * ref_entry['Speed[KPH]']
             query_speed = 5/18 * query_entry['Speed[KPH]']
-            delta_time = (query_dt - ref_dt).total_seconds()
+            delta_time = float(query_timestamp - ref_timestamp)/1e9
             ref_trans = np.dot(enu2ref, np.array([x, y, z]))
             move_dist = abs(0.5*(ref_speed + query_speed)*delta_time)
             trans_norm = np.linalg.norm(ref_trans)
