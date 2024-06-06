@@ -188,6 +188,7 @@ def subMap(scan_paths, seg_idx):
         parts = filename.split('_')
         query_timestamp = parts[0] + '_' + parts[1]
         pose_trans = np.eye(4)
+        imu_init_guess = np.eye(4)
         if(for_idx > 0):
             pose_trans = pose.getTransformationMatrix(ref_timestamp, query_timestamp)
             imu_init_guess = pose.getIMUInfo(ref_timestamp, query_timestamp)
@@ -216,10 +217,10 @@ def subMap(scan_paths, seg_idx):
         c_d_th = 0.8
         if args.indoor:
             final_transformation, has_converged, fitness_score = imo_pcd_reader.performNDT(curr_scan_pts, prev_scan_pts, icp_initial, 0.2, 0.4, 0.01, 0.1, 50)
-            if fitness_score > c_d_th and pose_trans is not None:
-                imu_final_transformation, imu_has_converged, imu_fitness_score = imo_pcd_reader.performNDT(curr_scan_pts, prev_scan_pts, imu_init_guess, 0.2, 0.4, 0.01, 0.1, 50)
+            if fitness_score > c_d_th and imu_init_guess is not None:
+                new_init_guess = np.dot(icp_initial, imu_init_guess)
+                imu_final_transformation, imu_has_converged, imu_fitness_score = imo_pcd_reader.performNDT(curr_scan_pts, prev_scan_pts, new_init_guess, 0.2, 0.4, 0.01, 0.1, 50)
                 logger.warning(f"seg_idx: {seg_idx}, idx: {for_idx}, fitness_score: {fitness_score}, imu_fitness_score: {imu_fitness_score}")
-                logger.warning(f"seg_idx: {seg_idx}, idx: {for_idx}, icp_initial: {icp_initial}, imu_init_guess: {imu_init_guess}")
                 if imu_fitness_score < fitness_score:
                     logger.warning(f"seg_idx: {seg_idx}, idx: {for_idx}, lidar odometry fitness_score too high, IMU recalculated fitness_score: {imu_fitness_score}")
                     final_transformation = imu_final_transformation

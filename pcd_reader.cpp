@@ -392,15 +392,10 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
     }; 
     float sensor_height = 0.0;
     float height_clip_range_low  = 1.0, height_clip_range_high = 1.0;
-    float normal_filter_thresh = 20.0, floor_normal_thresh = 10.0; 
-    float distance_near_thresh = 0.1, distance_far_thresh = 80.0;
+    float normal_filter_thresh = 20.0, floor_normal_thresh = 10.0;
+    
     pcl::PointCloud<pcl::PointXYZI>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZI>);
     pcl::copyPointCloud(*source_points, *filtered);
-    
-    // std::copy_if(distance_filtered->begin(), distance_filtered->end(), std::back_inserter(filtered->points), [&](const pcl::PointXYZI& p) {
-    //   double d = p.getVector3fMap().norm();
-    //   return d > distance_near_thresh && d < distance_far_thresh;
-    // });
 
     filtered->width = filtered->size();
     filtered->height = 1;

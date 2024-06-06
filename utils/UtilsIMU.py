@@ -141,7 +141,7 @@ class IMUPose:
             gyro_x_mean = 0.0
             gyro_y_mean = 0.0
             gyro_z_mean = 0.0
-            for imu_index in range(start_index, end_index + 1):
+            for imu_index in range(start_index, end_index):
                 query_entry = self.df.iloc[imu_index]
                 gyro_z = query_entry['Yaw rate[°/s]'] / 180.0 * 3.1415926
                 gyro_z_mean += gyro_z
@@ -161,7 +161,7 @@ class IMUPose:
                 acc_z = query_entry['Acceleration-z[m/s2]']
                 acc_z_mean += acc_z
 
-            imu_count = end_index - start_index + 1
+            imu_count = end_index - start_index
             acc_x_mean /= imu_count
             acc_y_mean /= imu_count
             acc_z_mean /= imu_count
@@ -175,6 +175,14 @@ class IMUPose:
             rot = R.from_quat(quaternion)
             rotation_matrix = rot.as_matrix()
             T[:3, :3] = rotation_matrix
+
+            euler = rot.as_euler('xyz', degrees=True)
+            euler_angles = (0, euler[1], euler[2])
+            rot_from_euler = R.from_euler('xyz', euler_angles, degrees=True)
+            rot = rot_from_euler
+            rotation_matrix = rot.as_matrix()
+            T[:3, :3] = rotation_matrix
+
             return T
         else:
             return None
