@@ -395,13 +395,12 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
     float normal_filter_thresh = 20.0, floor_normal_thresh = 10.0; 
     float distance_near_thresh = 0.1, distance_far_thresh = 80.0;
     pcl::PointCloud<pcl::PointXYZI>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZI>);
-    pcl::PointCloud<pcl::PointXYZI>::Ptr distance_filtered(new pcl::PointCloud<pcl::PointXYZI>);
-    pcl::copyPointCloud(*source_points, *distance_filtered);
+    pcl::copyPointCloud(*source_points, *filtered);
     
-    std::copy_if(distance_filtered->begin(), distance_filtered->end(), std::back_inserter(filtered->points), [&](const pcl::PointXYZI& p) {
-      double d = p.getVector3fMap().norm();
-      return d > distance_near_thresh && d < distance_far_thresh;
-    });
+    // std::copy_if(distance_filtered->begin(), distance_filtered->end(), std::back_inserter(filtered->points), [&](const pcl::PointXYZI& p) {
+    //   double d = p.getVector3fMap().norm();
+    //   return d > distance_near_thresh && d < distance_far_thresh;
+    // });
 
     filtered->width = filtered->size();
     filtered->height = 1;
@@ -410,6 +409,7 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
     filtered = plane_clip_lambda(filtered, Eigen::Vector4f(0.0f, 0.0f, 1.0f, sensor_height + height_clip_range_low), false);
     filtered = plane_clip_lambda(filtered, Eigen::Vector4f(0.0f, 0.0f, 1.0f, sensor_height - height_clip_range_high), true);
 
+    pcl::PointCloud<pcl::PointXYZI>::Ptr out_filtered(new pcl::PointCloud<pcl::PointXYZI>);
     auto normal_filtering = [&](const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) -> pcl::PointCloud<pcl::PointXYZI>::Ptr {
         pcl::NormalEstimation<pcl::PointXYZI, pcl::Normal> ne;
         ne.setInputCloud(cloud);
@@ -419,7 +419,7 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
 
         pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>);
         ne.setKSearch(10);
-        ne.setViewPoint(0.0f, 0.0f, sensor_height);
+        ne.setViewPoint(0.0f, 0.0f, 1.0f);
         ne.compute(*normals);
 
         pcl::PointCloud<pcl::PointXYZI>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZI>);
@@ -429,6 +429,8 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
             float dot = normals->at(i).getNormalVector3fMap().normalized().dot(Eigen::Vector3f::UnitZ());
             if(std::abs(dot) > std::cos(normal_filter_thresh * M_PI / 180.0)) {
                 filtered->push_back(cloud->at(i));
+            } else {
+                out_filtered->points.emplace_back(cloud->at(i));
             }
         }
 
@@ -437,12 +439,15 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
         filtered->is_dense = false;
         return filtered;
     };
+    typename pcl::PointCloud<PointT>::Ptr result_cloud(new pcl::PointCloud<PointT>);
     filtered = normal_filtering(filtered);
-
+    if (filtered->points.size() < 10) {
+        return result_cloud;
+    }
     // RANSAC
     pcl::SampleConsensusModelPlane<pcl::PointXYZI>::Ptr model_p(new pcl::SampleConsensusModelPlane<pcl::PointXYZI>(filtered));
     pcl::RandomSampleConsensus<pcl::PointXYZI> ransac(model_p);
-    ransac.setDistanceThreshold(0.1);
+    ransac.setDistanceThreshold(0.2);
     ransac.computeModel();
 
     pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
@@ -454,7 +459,7 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
     ransac.getModelCoefficients(coeffs);
 
     pcl::PointCloud<pcl::PointXYZI>::Ptr inlier_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-    typename pcl::PointCloud<PointT>::Ptr result_cloud(new pcl::PointCloud<PointT>);
+    pcl::PointCloud<pcl::PointXYZI>::Ptr outlier_cloud(new pcl::PointCloud<pcl::PointXYZI>);
     double dot = coeffs.head<3>().dot(reference.head<3>());
 
     if(std::abs(dot) < std::cos(floor_normal_thresh * M_PI / 180.0)) {
@@ -468,10 +473,44 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
     pcl::ExtractIndices<pcl::PointXYZI> extract;
     extract.setInputCloud(filtered);
     extract.setIndices(inliers);
+    extract.setNegative (true);
     extract.filter(*inlier_cloud);
-
     floor_coeffs = Eigen::Vector4f(coeffs);
 
+    extract.setInputCloud(filtered);
+    extract.setIndices(inliers);
+    extract.setNegative (false);
+    extract.filter(*outlier_cloud);
+
+    
+    *out_filtered += *outlier_cloud;
+    if (!out_filtered->points.empty() && !inlier_cloud->points.empty()) {
+        auto point_to_plane_dist = [&](double x, double y, double z, const Eigen::Vector4f& floor_coeffs) -> float {
+            float a = floor_coeffs[0];
+            float b = floor_coeffs[1];
+            float c = floor_coeffs[2];
+            float d = floor_coeffs[3];
+            return (a * x + b * y + c * z + d) / std::sqrt(a * a + b * b + c * c);
+        };
+        std::vector<float> distances;
+        for (auto &p : inlier_cloud->points) {
+            distances.emplace_back(point_to_plane_dist(p.x, p.y, p.z, floor_coeffs));
+        }
+        float mean = std::accumulate(distances.begin(), distances.end(), 0.0) / distances.size();
+        float sum_of_squares = std::accumulate(distances.begin(), distances.end(), 0.0,
+            [&mean](double sum, double val) {
+                return sum + std::pow(val - mean, 2);
+            }
+        );
+        float variance = sum_of_squares / distances.size();
+        float sigma = std::sqrt(variance);
+        for (auto &p : out_filtered->points) {
+            auto dist = point_to_plane_dist(p.x, p.y, p.z, floor_coeffs);
+            if (std::fabs(dist) <= 3 * sigma) {
+                inlier_cloud->points.emplace_back(p);
+            }
+        }
+    }
     pcl::copyPointCloud(*inlier_cloud, *result_cloud);
     return result_cloud;
 }
