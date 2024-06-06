@@ -148,7 +148,7 @@ def cloud_transform(mat, scan_path, out_name, save_dir, excluded_area, ceiling_h
         imo_pcd_reader.save_MAP_pcd(out_coord, rgbs, intensities, save_pcd_path)
 
 all_matrices = read_csv_to_matrices(pose_file_dir)
-excluded_area = np.array([[-1, 3], [-1, 1]])
+excluded_area = np.array([[-1.03, 3.863], [-1, 1]])
 ceiling_height = 2
 
 lidar_valid_range = 50
