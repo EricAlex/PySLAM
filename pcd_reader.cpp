@@ -405,10 +405,10 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
     filtered->width = filtered->size();
     filtered->height = 1;
     filtered->is_dense = false;
-
+    std::cout << "source points size: " << filtered->points.size() << std::endl;
     filtered = plane_clip_lambda(filtered, Eigen::Vector4f(0.0f, 0.0f, 1.0f, sensor_height + height_clip_range_low), false);
     filtered = plane_clip_lambda(filtered, Eigen::Vector4f(0.0f, 0.0f, 1.0f, sensor_height - height_clip_range_high), true);
-
+    std::cout << "plane clip points size: " << filtered->points.size() << std::endl;
     pcl::PointCloud<pcl::PointXYZI>::Ptr out_filtered(new pcl::PointCloud<pcl::PointXYZI>);
     auto normal_filtering = [&](const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) -> pcl::PointCloud<pcl::PointXYZI>::Ptr {
         pcl::NormalEstimation<pcl::PointXYZI, pcl::Normal> ne;
@@ -441,6 +441,7 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
     };
     typename pcl::PointCloud<PointT>::Ptr result_cloud(new pcl::PointCloud<PointT>);
     filtered = normal_filtering(filtered);
+    std::cout << "normal filtering points size: " << filtered->points.size() << std::endl;
     if (filtered->points.size() < 10) {
         return result_cloud;
     }
@@ -482,6 +483,7 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
     extract.setNegative (false);
     extract.filter(*outlier_cloud);
 
+    std::cout << "ransac points size: " << inlier_cloud->points.size() << std::endl;
     
     *out_filtered += *outlier_cloud;
     if (!out_filtered->points.empty() && !inlier_cloud->points.empty()) {

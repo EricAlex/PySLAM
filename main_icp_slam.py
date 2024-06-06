@@ -7,7 +7,7 @@ import random
 import argparse
 import glob
 import logging
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, parallel_backend
 from datetime import datetime
 
 import numpy as np
@@ -62,6 +62,12 @@ def setup_logging(log_file):
         ]
     )
     print(f"Logs are being saved to: {log_file}")
+
+def init_logging():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
 
 def filename_2_timestamp(filename):
     parts = filename.split('_')
@@ -161,6 +167,7 @@ if IMU_all_good:
 def subMap(scan_paths, seg_idx):
 
     logger = logging.getLogger(__name__)
+    init_logging()
     num_frames = len(scan_paths)
     # Pose Graph Manager (for back-end optimization) initialization
     PGM = PoseGraphManager()
@@ -209,9 +216,10 @@ def subMap(scan_paths, seg_idx):
         c_d_th = 0.8
         if args.indoor:
             final_transformation, has_converged, fitness_score = imo_pcd_reader.performNDT(curr_scan_pts, prev_scan_pts, icp_initial, 0.2, 0.4, 0.01, 0.1, 50)
-            logger.info(f"seg_idx: {seg_idx}, idx: {for_idx}, has_converged: {has_converged}, fitness_score: {fitness_score}")
             if fitness_score > c_d_th and pose_trans is not None:
                 imu_final_transformation, imu_has_converged, imu_fitness_score = imo_pcd_reader.performNDT(curr_scan_pts, prev_scan_pts, imu_init_guess, 0.2, 0.4, 0.01, 0.1, 50)
+                logger.warning(f"seg_idx: {seg_idx}, idx: {for_idx}, fitness_score: {fitness_score}, imu_fitness_score: {imu_fitness_score}")
+                logger.warning(f"seg_idx: {seg_idx}, idx: {for_idx}, icp_initial: {icp_initial}, imu_init_guess: {imu_init_guess}")
                 if imu_fitness_score < fitness_score:
                     logger.warning(f"seg_idx: {seg_idx}, idx: {for_idx}, lidar odometry fitness_score too high, IMU recalculated fitness_score: {imu_fitness_score}")
                     final_transformation = imu_final_transformation
@@ -293,7 +301,8 @@ def alignSections(target_poses, target_pc_paths, target_idx, source_poses, sourc
 
     c_d_th = 0.8
     final_transformation, has_converged, fitness_score = imo_pcd_reader.performNDT(source_coords, target_coords, target_matrices[-1], 0.2, 0.4, 0.01, 0.1, 50)
-    logger.warning(f"source sec {source_idx} to target sec {target_idx}, has_converged: {has_converged}, fitness_score: {fitness_score}")
+    if fitness_score > c_d_th:
+        logger.warning(f"source sec {source_idx} to target sec {target_idx}, has_converged: {has_converged}, fitness_score: {fitness_score}")
     if 2*fitness_score > c_d_th:
         max_c_d = c_d_th
     else:
@@ -349,8 +358,8 @@ for scan_paths in pcd_segments:
                     sec_e = (sec+1)*smf+1
                 sec_scan_paths.append(scan_paths[sec_s:sec_e])
         
-            results = Parallel(n_jobs=-1)(delayed(subMap)(sec_paths, for_idx) for for_idx, sec_paths in enumerate(sec_scan_paths))
-            sec_results = Parallel(n_jobs=-1)(delayed(alignSections)(result, sec_paths, for_idx, results[for_idx+1], sec_scan_paths[for_idx+1], for_idx+1) 
+            with parallel_backend('loky'): results = Parallel(n_jobs=-1)(delayed(subMap)(sec_paths, for_idx) for for_idx, sec_paths in enumerate(sec_scan_paths))
+            with parallel_backend('loky'): sec_results = Parallel(n_jobs=-1)(delayed(alignSections)(result, sec_paths, for_idx, results[for_idx+1], sec_scan_paths[for_idx+1], for_idx+1) 
                                                 for for_idx, (result, sec_paths) in enumerate(zip(results[:-1], sec_scan_paths[:-1])))
             
             pose_list_to_stack = [results[0][:-1,:]]

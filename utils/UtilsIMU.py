@@ -143,13 +143,13 @@ class IMUPose:
             gyro_z_mean = 0.0
             for imu_index in range(start_index, end_index + 1):
                 query_entry = self.df.iloc[imu_index]
-                gyro_z = query_entry['Yaw rate[°/s]']
+                gyro_z = query_entry['Yaw rate[°/s]'] / 180.0 * 3.1415926
                 gyro_z_mean += gyro_z
 
-                gyro_y = query_entry['Pitch rate[°/s]']
+                gyro_y = query_entry['Pitch rate[°/s]'] / 180.0 * 3.1415926
                 gyro_y_mean += gyro_y
 
-                gyro_x = query_entry['Roll rate[°/s]']
+                gyro_x = query_entry['Roll rate[°/s]'] / 180.0 * 3.1415926
                 gyro_x_mean += gyro_x
 
                 acc_x = query_entry['Acceleration-x[m/s2]']
