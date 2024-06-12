@@ -9,7 +9,7 @@ import argparse
 import glob
 from datetime import datetime
 import shutil
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, parallel_backend
 
 import json
 import numpy as np
@@ -170,7 +170,7 @@ geohash_file = os.path.basename(data_list_file_dir)
 parts = geohash_file.split('_')
 fname_prefix = parts[0] + '_' + parts[1] + '_' + parts[2] + '_' + parts[3]
 
-Parallel(n_jobs=-1)(delayed(cloud_transform)(mat, scan_path, out_name, save_dir, excluded_area, ceiling_height) 
+with parallel_backend('loky'): Parallel(n_jobs=-1)(delayed(cloud_transform)(mat, scan_path, out_name, save_dir, excluded_area, ceiling_height) 
                                                 for mat, scan_path, out_name in zip(all_matrices, scan_paths, scan_names))
 
 # save whole map to pcd

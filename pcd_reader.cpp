@@ -11,8 +11,11 @@
 #include <pcl/search/impl/search.hpp>
 #include <pcl/filters/impl/plane_clipper3D.hpp>
 #include <pcl/filters/extract_indices.h>
+#include <pcl/filters/radius_outlier_removal.h>
+#include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/sample_consensus/ransac.h>
 #include <pcl/sample_consensus/sac_model_plane.h>
+
 #include <Eigen/Core>
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgproc.hpp>
@@ -253,6 +256,59 @@ py::array_t<float> read_pcd_with_excluded_area_read_ratio(const std::string &fil
         result_ptr[i * 4 + 3] = cloud.points[filter_idx[i]].intensity;
     }
 
+    return result;
+}
+
+py::array_t<float> read_pcd_with_prefiltering(const std::string &filename, double resolution,
+                                                double near_thresh, double far_thresh,
+                                                double radius, int min_neighbors) {
+    pcl::PointCloud<PointIMO>::Ptr cloud(new pcl::PointCloud<PointIMO>());
+    if (pcl::io::loadPCDFile<PointIMO>(filename, *cloud) == -1) {
+        throw std::runtime_error("Error loading PCD file!");
+    }
+    pcl::PointCloud<pcl::PointXYZI>::Ptr source_points(new pcl::PointCloud<pcl::PointXYZI>);
+    pcl::copyPointCloud(*cloud, *source_points);
+    
+    // downsample
+    pcl::VoxelGrid<pcl::PointXYZI>::Ptr downsample_filter(new pcl::VoxelGrid<pcl::PointXYZI>());
+    downsample_filter->setLeafSize(resolution, resolution, resolution);
+    pcl::PointCloud<pcl::PointXYZI>::Ptr ds_filtered(new pcl::PointCloud<pcl::PointXYZI>());
+    downsample_filter->setInputCloud(source_points);
+    downsample_filter->filter(*ds_filtered);
+
+    // distance_filter
+    pcl::PointCloud<pcl::PointXYZI>::Ptr distance_filtered(new pcl::PointCloud<pcl::PointXYZI>());
+    distance_filtered->reserve(ds_filtered->points.size());
+    std::copy_if(ds_filtered->points.begin(), ds_filtered->points.end(), std::back_inserter(distance_filtered->points), [&](const pcl::PointXYZI& p) {
+      double d = p.getVector3fMap().norm();
+      return d > near_thresh && d < far_thresh;
+    });
+    distance_filtered->width = distance_filtered->size();
+    distance_filtered->height = 1;
+    distance_filtered->is_dense = false;
+
+    // outlier_removal
+    pcl::PointCloud<pcl::PointXYZI>::Ptr result_cloud(new pcl::PointCloud<pcl::PointXYZI>());
+    pcl::RadiusOutlierRemoval<pcl::PointXYZI>::Ptr outlier_removal_filter(new pcl::RadiusOutlierRemoval<pcl::PointXYZI>());
+    outlier_removal_filter->setRadiusSearch(radius);
+    outlier_removal_filter->setMinNeighborsInRadius(min_neighbors);
+    outlier_removal_filter->setInputCloud(distance_filtered);
+    outlier_removal_filter->filter(*result_cloud);
+
+    // Create a NumPy array with the appropriate shape and data type
+    auto result = py::array_t<float>(std::vector<size_t>{result_cloud->points.size(), 4});
+
+    // Access NumPy array's buffer for direct writing
+    auto rinfo = result.request();
+    float *result_ptr = (float *)rinfo.ptr;
+
+    // Copy data from the PCL point cloud to the NumPy array
+    for (size_t i = 0; i < result_cloud->points.size(); i++) {
+        result_ptr[i * 4 + 0] = result_cloud->points[i].x;
+        result_ptr[i * 4 + 1] = result_cloud->points[i].y;
+        result_ptr[i * 4 + 2] = result_cloud->points[i].z;
+        result_ptr[i * 4 + 3] = result_cloud->points[i].intensity;
+    }
     return result;
 }
 
@@ -647,8 +703,8 @@ void generate_2d_map(const std::string &pcd_filename,
     std::vector<std::vector<size_t>> height_grid_c(grid_height, std::vector<size_t>(grid_width, 0));
     size_t valid_pixel_c(0);
     for (const auto& point : cloud->points) {
-        int x_index = int((point.x - min_x) / grid_resolution);
-        int y_index = int((point.y - min_y) / grid_resolution);
+        int y_index = int((point.x - min_x) / grid_resolution);
+        int x_index = int((point.y - min_y) / grid_resolution);
         // Check if the indices are within the grid bounds
         if (x_index >= 0 && x_index < grid_width && y_index >= 0 && y_index < grid_height) {
             if(intensity_grid[y_index][x_index]==0.0){
@@ -690,8 +746,8 @@ void generate_2d_map(const std::string &pcd_filename,
     std::vector<std::vector<float>> ground_height_grid(grid_height, std::vector<float>(grid_width, 0.0));
     size_t valid_pixel_idx(0);
     for (const auto& point : ground_cloud->points) {
-        int x_index = int((point.x - min_x) / grid_resolution);
-        int y_index = int((point.y - min_y) / grid_resolution);
+        int y_index = int((point.x - min_x) / grid_resolution);
+        int x_index = int((point.y - min_y) / grid_resolution);
         // Check if the indices are within the grid bounds
         if (x_index >= 0 && x_index < grid_width && y_index >= 0 && y_index < grid_height) {
             if(ground_grid[y_index][x_index]==0.0){
@@ -706,6 +762,19 @@ void generate_2d_map(const std::string &pcd_filename,
     cv::Mat ground_intensity_mat = stretchContrast98_float(ground_grid, valid_pixel_idx, 0.03);
     cv::Mat colormapped_ground_intensity;
     cv::applyColorMap(ground_intensity_mat, colormapped_ground_intensity, cv::COLORMAP_PARULA);
+
+    // (0, 0)
+    int center_y_axis = int((0 - min_x) / grid_resolution);
+    int center_x_axis = int((0 - min_y) / grid_resolution);
+
+    // (50, 0)
+    int y_axis = int((50 - min_x) / grid_resolution);
+    int x_axis = int((0 - min_y) / grid_resolution);
+    cv::line(colormapped_ground_intensity, cv::Point(center_x_axis, center_y_axis), cv::Point(x_axis, y_axis), cv::Scalar(0, 0, 255), 4);
+    // (0, 50)
+    y_axis = int((0 - min_x) / grid_resolution);
+    x_axis = int((50 - min_y) / grid_resolution);
+    cv::line(colormapped_ground_intensity, cv::Point(center_x_axis, center_y_axis), cv::Point(x_axis, y_axis), cv::Scalar(0, 255, 0), 4);
     cv::imwrite(ground_img_intensity, colormapped_ground_intensity);
 
     cv::Mat intensity_mat = stretchContrast98_float(intensity_grid, valid_pixel_c, 0.03);
@@ -812,6 +881,7 @@ PYBIND11_MODULE(imo_pcd_reader, m) {
     m.doc() = "Module for reading PCD files with attributes using PyBind11";
     m.def("read_pcd", &read_pcd, "Reads a PCD file and returns a NumPy array");
     m.def("read_pcd_with_excluded_area", &read_pcd_with_excluded_area, "Reads a PCD file and returns a NumPy array outside the excluded area");
+    m.def("read_pcd_with_prefiltering", &read_pcd_with_prefiltering, "Reads a PCD file and returns a prefiltering NumPy array ");
     m.def("read_pcd_with_excluded_area_read_ratio", &read_pcd_with_excluded_area_read_ratio, "Reads a PCD file and returns a NumPy array outside the excluded area and downsample to given ratio");
     m.def("save_MAP_pcd", &save_MAP_pcd, "Save a MAP PCD file from NumPy arrays");
     m.def("performNDT", &performNDT, "Perform NDT using NumPy arrays");

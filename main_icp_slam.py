@@ -61,7 +61,6 @@ def setup_logging(log_file):
             logging.StreamHandler()
         ]
     )
-    print(f"Logs are being saved to: {log_file}")
 
 def init_logging():
     logging.basicConfig(
@@ -165,9 +164,8 @@ if IMU_all_good:
     logging.info(f"IMU data all good!")
 
 def subMap(scan_paths, seg_idx):
-
     logger = logging.getLogger(__name__)
-    init_logging()
+    setup_logging(log_file)
     num_frames = len(scan_paths)
     # Pose Graph Manager (for back-end optimization) initialization
     PGM = PoseGraphManager()
@@ -272,6 +270,7 @@ def subMap(scan_paths, seg_idx):
 
 def alignSections(target_poses, target_pc_paths, target_idx, source_poses, source_pc_paths, source_idx):
     logger = logging.getLogger(__name__)
+    setup_logging(log_file)
     excluded_area = np.array([[-1, 3], [-1, 1]])
     ceiling_height = 100
     read_ratio = 2.0/len(target_pc_paths)
@@ -280,6 +279,7 @@ def alignSections(target_poses, target_pc_paths, target_idx, source_poses, sourc
     coord_to_stack = []
     for mat, scan_path in zip(target_matrices, target_pc_paths):
         scan = imo_pcd_reader.read_pcd_with_excluded_area_read_ratio(scan_path, excluded_area, ceiling_height, read_ratio)
+        # scan = imo_pcd_reader.read_pcd_with_prefiltering(scan_path, 0.2, 0.1, 60, 0.5, 2)
         coord = scan[:, :3]
         new_column = np.ones((coord.shape[0], 1))
         aug_coord = np.hstack((coord, new_column))
@@ -292,6 +292,7 @@ def alignSections(target_poses, target_pc_paths, target_idx, source_poses, sourc
     coord_to_stack = []
     for mat, scan_path in zip(source_matrices, source_pc_paths):
         scan = imo_pcd_reader.read_pcd_with_excluded_area_read_ratio(scan_path, excluded_area, ceiling_height, read_ratio)
+        # scan = imo_pcd_reader.read_pcd_with_prefiltering(scan_path, 0.2, 0.1, 60, 0.5, 2)
         coord = scan[:, :3]
         new_column = np.ones((coord.shape[0], 1))
         aug_coord = np.hstack((coord, new_column))
