@@ -377,9 +377,12 @@ void generate_whole_map(std::vector<std::string> &pcd_pth,
 
         // Concatenate the point clouds
         *final_cloud += DScloud;
-        if(pcd_i % 10 == 0)
-            std::cout<<pcd_i+1<<"/"<<pcd_pth.size()<<", ";
+        if(pcd_i % 10 == 0){
+            std::cout<<"\r"<<pcd_i+1<<"/"<<pcd_pth.size();
+            std::cout.flush();
+        }
     }
+    std::cout << std::endl;
 
     pcl::io::savePCDFileBinary(filename, *final_cloud);
 }
