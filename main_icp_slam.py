@@ -89,7 +89,7 @@ tmp_seg = []
 pc_extension = ".pcd"
 good_ratio_th = 0.5
 min_frame_th = 200
-pcd_channel = 'lidarFusion_pcd'
+pcd_channel = 'lidarTop'
 for index, scene_n in enumerate(scene_names):
     this_dir = os.path.join(args.data_base_dir, scene_n, pcd_channel)
     tmp_pcd_names = os.listdir(this_dir)
