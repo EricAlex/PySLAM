@@ -41,11 +41,12 @@ parser.add_argument("--keep_mid_pcds", action="store_true", default=False,
 args = parser.parse_args()
 
 # dataset
-correct_pcd_channel = "lidarFusion_pcd"
+correct_pcd_channel = "lidarTop"
 dummy_pcdname = "dummy.pcd"
 data_list_file_dir = glob.glob(os.path.join(args.slam_paras_file_dir, "*_pcs_data_path.csv"))[0]
 df = pd.read_csv(data_list_file_dir)
 tmp_scan_paths = df['File Path'].tolist()
+
 scan_paths = []
 scan_names = []
 for pc_path in tmp_scan_paths:
@@ -140,12 +141,21 @@ def cloud_transform(mat, scan_path, out_name, save_dir, excluded_area, ceiling_h
         aug_coord = np.hstack((coord, new_column))
         trans_coord = mat.dot(aug_coord.T)
         out_coord = trans_coord.T[:, :3]
+
+        ground_scan = imo_pcd_reader.extract_ground(scan)
+        ground_coord = ground_scan[:, :3]
+        ground_intensities = ground_scan[:, -1]
+        ground_new_column = np.ones((ground_coord.shape[0], 1))
+        ground_aug_coord = np.hstack((ground_coord, ground_new_column))
+        ground_trans_coord = mat.dot(ground_aug_coord.T)
+        ground_out_coord = ground_trans_coord.T[:, :3]
+
         if args.no_assign_colors:
             rgbs = np.ones((coord.shape[0], 3))
         else:
             rgbs = assign_colors_from_image(coord, scan_path)
         save_pcd_path = os.path.join(save_dir, out_name)
-        imo_pcd_reader.save_MAP_pcd(out_coord, rgbs, intensities, save_pcd_path)
+        imo_pcd_reader.save_MAP_pcd(out_coord, rgbs, intensities, ground_out_coord, ground_intensities, save_pcd_path)
 
 all_matrices = read_csv_to_matrices(pose_file_dir)
 excluded_area = np.array([[-1.03, 3.863], [-1, 1]])

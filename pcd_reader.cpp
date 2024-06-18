@@ -149,6 +149,135 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr numpyToPCL(py::array_t<float> &input_array) 
     return cloud;
 }
 
+template<typename PointT>
+typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
+        const typename pcl::PointCloud<PointT>::Ptr&source_points,
+        Eigen::Vector4f& floor_coeffs)
+{   
+    float normal_filter_thresh = 20.0, floor_normal_thresh = 10.0;
+    
+    pcl::PointCloud<pcl::PointXYZI>::Ptr height_filtered(new pcl::PointCloud<pcl::PointXYZI>);
+    pcl::PointCloud<pcl::PointXYZI>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZI>);
+    pcl::copyPointCloud(*source_points, *height_filtered);
+
+    std::copy_if(height_filtered->begin(), height_filtered->end(), std::back_inserter(filtered->points), [&](const pcl::PointXYZI& p) {
+      return p.z < 0.5;
+    });
+
+    filtered->width = filtered->size();
+    filtered->height = 1;
+    filtered->is_dense = false;
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr out_filtered(new pcl::PointCloud<pcl::PointXYZI>);
+    auto normal_filtering = [&](const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) -> pcl::PointCloud<pcl::PointXYZI>::Ptr {
+        pcl::NormalEstimation<pcl::PointXYZI, pcl::Normal> ne;
+        ne.setInputCloud(cloud);
+
+        pcl::search::KdTree<pcl::PointXYZI>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZI>);
+        ne.setSearchMethod(tree);
+
+        pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>);
+        ne.setKSearch(10);
+        ne.setViewPoint(0.0f, 0.0f, 1.0f);
+        ne.compute(*normals);
+
+        pcl::PointCloud<pcl::PointXYZI>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZI>);
+        filtered->reserve(cloud->size());
+
+        for(int i = 0; i < cloud->size(); i++) {
+            float dot = normals->at(i).getNormalVector3fMap().normalized().dot(Eigen::Vector3f::UnitZ());
+            if(std::abs(dot) > std::cos(normal_filter_thresh * M_PI / 180.0)) {
+                filtered->push_back(cloud->at(i));
+            } else {
+                out_filtered->points.emplace_back(cloud->at(i));
+            }
+        }
+
+        filtered->width = filtered->size();
+        filtered->height = 1;
+        filtered->is_dense = false;
+        return filtered;
+    };
+    typename pcl::PointCloud<PointT>::Ptr result_cloud(new pcl::PointCloud<PointT>);
+    filtered = normal_filtering(filtered);
+    if (filtered->points.size() < 10) {
+        return result_cloud;
+    }
+    // RANSAC
+    pcl::SampleConsensusModelPlane<pcl::PointXYZI>::Ptr model_p(new pcl::SampleConsensusModelPlane<pcl::PointXYZI>(filtered));
+    pcl::RandomSampleConsensus<pcl::PointXYZI> ransac(model_p);
+    ransac.setDistanceThreshold(0.2);
+    ransac.computeModel();
+
+    pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+    ransac.getInliers(inliers->indices);
+    // verticality check of the detected floor's normal
+    Eigen::Vector4f reference = Eigen::Vector4f::UnitZ();
+
+    Eigen::VectorXf coeffs;
+    ransac.getModelCoefficients(coeffs);
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr inlier_cloud(new pcl::PointCloud<pcl::PointXYZI>);
+    pcl::PointCloud<pcl::PointXYZI>::Ptr outlier_cloud(new pcl::PointCloud<pcl::PointXYZI>);
+    double dot = coeffs.head<3>().dot(reference.head<3>());
+
+    if(std::abs(dot) < std::cos(floor_normal_thresh * M_PI / 180.0)) {
+        // the normal is not vertical
+        return result_cloud;
+    }
+    // make the normal upward
+    if(coeffs.head<3>().dot(Eigen::Vector3f::UnitZ()) < 0.0f) {
+      coeffs *= -1.0f;
+    }
+    pcl::ExtractIndices<pcl::PointXYZI> extract;
+    extract.setInputCloud(filtered);
+    extract.setIndices(inliers);
+    extract.setNegative (true);
+    extract.filter(*inlier_cloud);
+    floor_coeffs = Eigen::Vector4f(coeffs);
+
+    extract.setInputCloud(filtered);
+    extract.setIndices(inliers);
+    extract.setNegative (false);
+    extract.filter(*outlier_cloud);
+
+    std::cout << "ransac points size: " << inlier_cloud->points.size() << std::endl;
+    
+    *out_filtered += *outlier_cloud;
+    if (!out_filtered->points.empty() && !inlier_cloud->points.empty()) {
+        auto point_to_plane_dist = [&](double x, double y, double z, const Eigen::Vector4f& floor_coeffs) -> float {
+            float a = floor_coeffs[0];
+            float b = floor_coeffs[1];
+            float c = floor_coeffs[2];
+            float d = floor_coeffs[3];
+            return (a * x + b * y + c * z + d) / std::sqrt(a * a + b * b + c * c);
+        };
+        std::vector<float> distances;
+        for (auto &p : inlier_cloud->points) {
+            float dist = point_to_plane_dist(p.x, p.y, p.z, floor_coeffs);
+            distances.emplace_back(dist);
+        }
+        float mean = std::accumulate(distances.begin(), distances.end(), 0.0) / distances.size();
+        float sum_of_squares = std::accumulate(distances.begin(), distances.end(), 0.0,
+            [&mean](double sum, double val) {
+                return sum + std::pow(val - mean, 2);
+            }
+        );
+        float variance = sum_of_squares / distances.size();
+        float sigma = std::sqrt(variance);
+        std::cout << "sigma: " << sigma << std::endl;
+        for (auto &p : out_filtered->points) {
+            auto dist = point_to_plane_dist(p.x, p.y, p.z, floor_coeffs);
+            if (std::fabs(dist) <= 0.2) {
+                inlier_cloud->points.emplace_back(p);
+            }
+        }
+    }
+    std::cout << "result cloud points size: " << inlier_cloud->points.size() << std::endl;
+    pcl::copyPointCloud(*inlier_cloud, *result_cloud);
+    return result_cloud;
+}
+
 // Function to read a PCD file and convert it to a NumPy array
 py::array_t<float> read_pcd(const std::string &filename) {
     pcl::PointCloud<PointIMO> cloud;
@@ -211,6 +340,35 @@ py::array_t<float> read_pcd_with_excluded_area(const std::string &filename,
     }
 
     return result;
+}
+
+py::array_t<float> extract_ground(py::array_t<float>& input_array) {
+    // Copy data from the PCL point cloud to the NumPy array
+    pcl::PointCloud<PointIMO>::Ptr source_cloud(new pcl::PointCloud<PointIMO>());
+    source_cloud->width = input_array.shape(0);
+    source_cloud->height = 1; // Unorganized
+    source_cloud->points.resize(source_cloud->width * source_cloud->height);
+
+    auto data = input_array.unchecked(); // Access data directly
+    for (size_t i = 0; i < source_cloud->size(); ++i) {
+        source_cloud->points[i].x = data(i, 0);
+        source_cloud->points[i].y = data(i, 1);
+        source_cloud->points[i].z = data(i, 2);
+        source_cloud->points[i].intensity = data(i, 3);
+    }
+
+    Eigen::Vector4f floor_coeffs;
+    pcl::PointCloud<PointIMO>::Ptr ground_cloud  = ground_plane_fitting<PointIMO>(source_cloud, floor_coeffs);
+    auto ground_result = py::array_t<float>(std::vector<size_t>{ground_cloud->points.size(), 4});
+    auto ginfo = ground_result.request();
+    float *ground_result_ptr = (float *)ginfo.ptr;
+    for (size_t i = 0; i < ground_cloud->points.size(); ++i) {
+        ground_result_ptr[i * 4 + 0] = ground_cloud->points[i].x;
+        ground_result_ptr[i * 4 + 1] = ground_cloud->points[i].y;
+        ground_result_ptr[i * 4 + 2] = ground_cloud->points[i].z;
+        ground_result_ptr[i * 4 + 3] = ground_cloud->points[i].intensity;
+    }
+    return ground_result;
 }
 
 py::array_t<float> read_pcd_with_excluded_area_read_ratio(const std::string &filename,
@@ -390,6 +548,8 @@ py::array_t<float> assign_colors(py::array_t<float> &coords,
 void save_MAP_pcd(py::array_t<float> &coords,
                   py::array_t<float> &rgbs,
                   py::array_t<float> &intensities,
+                  py::array_t<float> &ground_coords,
+                  py::array_t<float> &ground_intensities,
                   const std::string &filename) {
     // Ensure NumPy arrays have the right shapes and types
     if (coords.ndim() != 2 || coords.shape(1) != 3)
@@ -422,150 +582,26 @@ void save_MAP_pcd(py::array_t<float> &coords,
 
     // Save the PCD file
     pcl::io::savePCDFileBinary(filename, cloud);
-}
 
+    // Create PCL point cloud with intensity
+    pcl::PointCloud<PointMAP> ground_cloud; 
+    ground_cloud.width = ground_coords.shape(0);
+    ground_cloud.height = 1; // Unorganized
+    ground_cloud.is_dense = false;
+    ground_cloud.points.resize(ground_cloud.width * ground_cloud.height);
 
-template<typename PointT>
-typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
-        const typename pcl::PointCloud<PointT>::Ptr&source_points,
-        Eigen::Vector4f& floor_coeffs)
-{   
-    auto plane_clip_lambda = [](const pcl::PointCloud<pcl::PointXYZI>::Ptr& src_cloud, const Eigen::Vector4f& plane, bool negative) -> pcl::PointCloud<pcl::PointXYZI>::Ptr {
-        pcl::PlaneClipper3D<pcl::PointXYZI> clipper(plane);
-        pcl::PointIndices::Ptr indices(new pcl::PointIndices);
-
-        clipper.clipPointCloud3D(*src_cloud, indices->indices);
-
-        pcl::PointCloud<pcl::PointXYZI>::Ptr dst_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-
-        pcl::ExtractIndices<pcl::PointXYZI> extract;
-        extract.setInputCloud(src_cloud);
-        extract.setIndices(indices);
-        extract.setNegative(negative);
-        extract.filter(*dst_cloud);
-
-        return dst_cloud;
-    }; 
-    float sensor_height = 0.0;
-    float height_clip_range_low  = 1.0, height_clip_range_high = 1.0;
-    float normal_filter_thresh = 20.0, floor_normal_thresh = 10.0;
-    
-    pcl::PointCloud<pcl::PointXYZI>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZI>);
-    pcl::copyPointCloud(*source_points, *filtered);
-
-    filtered->width = filtered->size();
-    filtered->height = 1;
-    filtered->is_dense = false;
-    std::cout << "source points size: " << filtered->points.size() << std::endl;
-    filtered = plane_clip_lambda(filtered, Eigen::Vector4f(0.0f, 0.0f, 1.0f, sensor_height + height_clip_range_low), false);
-    filtered = plane_clip_lambda(filtered, Eigen::Vector4f(0.0f, 0.0f, 1.0f, sensor_height - height_clip_range_high), true);
-    std::cout << "plane clip points size: " << filtered->points.size() << std::endl;
-    pcl::PointCloud<pcl::PointXYZI>::Ptr out_filtered(new pcl::PointCloud<pcl::PointXYZI>);
-    auto normal_filtering = [&](const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) -> pcl::PointCloud<pcl::PointXYZI>::Ptr {
-        pcl::NormalEstimation<pcl::PointXYZI, pcl::Normal> ne;
-        ne.setInputCloud(cloud);
-
-        pcl::search::KdTree<pcl::PointXYZI>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZI>);
-        ne.setSearchMethod(tree);
-
-        pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>);
-        ne.setKSearch(10);
-        ne.setViewPoint(0.0f, 0.0f, 1.0f);
-        ne.compute(*normals);
-
-        pcl::PointCloud<pcl::PointXYZI>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZI>);
-        filtered->reserve(cloud->size());
-
-        for(int i = 0; i < cloud->size(); i++) {
-            float dot = normals->at(i).getNormalVector3fMap().normalized().dot(Eigen::Vector3f::UnitZ());
-            if(std::abs(dot) > std::cos(normal_filter_thresh * M_PI / 180.0)) {
-                filtered->push_back(cloud->at(i));
-            } else {
-                out_filtered->points.emplace_back(cloud->at(i));
-            }
-        }
-
-        filtered->width = filtered->size();
-        filtered->height = 1;
-        filtered->is_dense = false;
-        return filtered;
-    };
-    typename pcl::PointCloud<PointT>::Ptr result_cloud(new pcl::PointCloud<PointT>);
-    filtered = normal_filtering(filtered);
-    std::cout << "normal filtering points size: " << filtered->points.size() << std::endl;
-    if (filtered->points.size() < 10) {
-        return result_cloud;
+    // Fill the point cloud data
+    auto ground_coords_ptr = ground_coords.unchecked();
+    auto ground_intensities_ptr = ground_intensities.unchecked();
+    for (size_t i = 0; i < ground_cloud.points.size(); ++i) {
+        ground_cloud.points[i].x = ground_coords_ptr(i, 0);
+        ground_cloud.points[i].y = ground_coords_ptr(i, 1);
+        ground_cloud.points[i].z = ground_coords_ptr(i, 2);
+        ground_cloud.points[i].intensity = ground_intensities_ptr(i);
     }
-    // RANSAC
-    pcl::SampleConsensusModelPlane<pcl::PointXYZI>::Ptr model_p(new pcl::SampleConsensusModelPlane<pcl::PointXYZI>(filtered));
-    pcl::RandomSampleConsensus<pcl::PointXYZI> ransac(model_p);
-    ransac.setDistanceThreshold(0.2);
-    ransac.computeModel();
 
-    pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
-    ransac.getInliers(inliers->indices);
-    // verticality check of the detected floor's normal
-    Eigen::Vector4f reference = Eigen::Vector4f::UnitZ();
-
-    Eigen::VectorXf coeffs;
-    ransac.getModelCoefficients(coeffs);
-
-    pcl::PointCloud<pcl::PointXYZI>::Ptr inlier_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-    pcl::PointCloud<pcl::PointXYZI>::Ptr outlier_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-    double dot = coeffs.head<3>().dot(reference.head<3>());
-
-    if(std::abs(dot) < std::cos(floor_normal_thresh * M_PI / 180.0)) {
-        // the normal is not vertical
-        return result_cloud;
-    }
-    // make the normal upward
-    if(coeffs.head<3>().dot(Eigen::Vector3f::UnitZ()) < 0.0f) {
-      coeffs *= -1.0f;
-    }
-    pcl::ExtractIndices<pcl::PointXYZI> extract;
-    extract.setInputCloud(filtered);
-    extract.setIndices(inliers);
-    extract.setNegative (true);
-    extract.filter(*inlier_cloud);
-    floor_coeffs = Eigen::Vector4f(coeffs);
-
-    extract.setInputCloud(filtered);
-    extract.setIndices(inliers);
-    extract.setNegative (false);
-    extract.filter(*outlier_cloud);
-
-    std::cout << "ransac points size: " << inlier_cloud->points.size() << std::endl;
-    
-    *out_filtered += *outlier_cloud;
-    if (!out_filtered->points.empty() && !inlier_cloud->points.empty()) {
-        auto point_to_plane_dist = [&](double x, double y, double z, const Eigen::Vector4f& floor_coeffs) -> float {
-            float a = floor_coeffs[0];
-            float b = floor_coeffs[1];
-            float c = floor_coeffs[2];
-            float d = floor_coeffs[3];
-            return (a * x + b * y + c * z + d) / std::sqrt(a * a + b * b + c * c);
-        };
-        std::vector<float> distances;
-        for (auto &p : inlier_cloud->points) {
-            distances.emplace_back(point_to_plane_dist(p.x, p.y, p.z, floor_coeffs));
-        }
-        float mean = std::accumulate(distances.begin(), distances.end(), 0.0) / distances.size();
-        float sum_of_squares = std::accumulate(distances.begin(), distances.end(), 0.0,
-            [&mean](double sum, double val) {
-                return sum + std::pow(val - mean, 2);
-            }
-        );
-        float variance = sum_of_squares / distances.size();
-        float sigma = std::sqrt(variance);
-        for (auto &p : out_filtered->points) {
-            auto dist = point_to_plane_dist(p.x, p.y, p.z, floor_coeffs);
-            if (std::fabs(dist) <= 3 * sigma) {
-                inlier_cloud->points.emplace_back(p);
-            }
-        }
-    }
-    pcl::copyPointCloud(*inlier_cloud, *result_cloud);
-    return result_cloud;
+    // Save the PCD file
+    pcl::io::savePCDFileBinary(filename + "_ground.pcd", ground_cloud);
 }
 
 void generate_whole_map(std::vector<std::string> &pcd_pth,
@@ -575,10 +611,19 @@ void generate_whole_map(std::vector<std::string> &pcd_pth,
     pcl::PointCloud<PointMAP>::Ptr final_ground_cloud (new pcl::PointCloud<PointMAP>);
     for(size_t pcd_i=0; pcd_i<pcd_pth.size(); ++pcd_i){
         pcl::PointCloud<PointMAP>::Ptr cloud (new pcl::PointCloud<PointMAP>);
-        if (pcl::io::loadPCDFile<PointMAP>(pcd_pth[pcd_i], *cloud) == -1) {
-            throw std::runtime_error("无法读取PCD文件, 请检查路径! " + pcd_pth[pcd_i]);
-            return;
+        pcl::PointCloud<PointMAP>::Ptr ground_cloud(new pcl::PointCloud<PointMAP>);
+        if (pcd_pth[pcd_i].find("_ground.pcd") != std::string::npos) {
+            if (pcl::io::loadPCDFile<PointMAP>(pcd_pth[pcd_i], *ground_cloud) == -1) {
+                throw std::runtime_error("无法读取PCD文件, 请检查路径! " + pcd_pth[pcd_i]);
+                return;
+            }
+        } else {
+            if (pcl::io::loadPCDFile<PointMAP>(pcd_pth[pcd_i], *cloud) == -1) {
+                throw std::runtime_error("无法读取PCD文件, 请检查路径! " + pcd_pth[pcd_i]);
+                return;
+            }
         }
+        
         if(save_ratio>1){
             throw std::runtime_error("save_ratio 取值范围(0, 1)! ");
             return;
@@ -604,10 +649,9 @@ void generate_whole_map(std::vector<std::string> &pcd_pth,
 
         // Concatenate the point clouds
         *final_cloud += *DScloud;
+        *final_ground_cloud += *ground_cloud;
         if(pcd_i % 10 == 0)
             std::cout<<pcd_i+1<<"/"<<pcd_pth.size()<<", ";
-        Eigen::Vector4f floor_coeffs;
-        *final_ground_cloud += *ground_plane_fitting<PointMAP>(DScloud, floor_coeffs);
     }
 
     pcl::io::savePCDFileBinary(filename, *final_cloud);
@@ -743,7 +787,8 @@ void generate_2d_map(const std::string &pcd_filename,
         return;
     }
     std::vector<std::vector<float>> ground_grid(grid_height, std::vector<float>(grid_width, 0.0));
-    std::vector<std::vector<float>> ground_height_grid(grid_height, std::vector<float>(grid_width, 0.0));
+    std::vector<std::vector<float>> ground_height_grid(grid_height, std::vector<float>(grid_width, nanValue));
+    std::vector<std::vector<size_t>> ground_height_grid_c(grid_height, std::vector<size_t>(grid_width, 0));
     size_t valid_pixel_idx(0);
     for (const auto& point : ground_cloud->points) {
         int y_index = int((point.x - min_x) / grid_resolution);
@@ -757,6 +802,12 @@ void generate_2d_map(const std::string &pcd_filename,
                 ground_grid[y_index][x_index] = std::max(ground_grid[y_index][x_index], point.intensity);
                 // ground_grid[y_index][x_index] = 0.5 * (ground_grid[y_index][x_index] + point.intensity);
             }
+            if(isnan(ground_height_grid[y_index][x_index])){
+                ground_height_grid[y_index][x_index] = point.z;
+            }else{
+                ground_height_grid[y_index][x_index] = (ground_height_grid_c[y_index][x_index]*ground_height_grid[y_index][x_index] + point.z)/(ground_height_grid_c[y_index][x_index]+1);
+            }
+            ground_height_grid_c[y_index][x_index]++;
         }
     }
     cv::Mat ground_intensity_mat = stretchContrast98_float(ground_grid, valid_pixel_idx, 0.03);
@@ -812,6 +863,7 @@ void generate_2d_map(const std::string &pcd_filename,
         for (const auto& row : ground_height_grid) {
             for (size_t i = 0; i < row.size(); ++i) {
                 csvFile << row[i];
+                // csvFile << 0;
                 if (i != row.size() - 1) {
                     csvFile << ",";
                 }
@@ -881,6 +933,7 @@ PYBIND11_MODULE(imo_pcd_reader, m) {
     m.doc() = "Module for reading PCD files with attributes using PyBind11";
     m.def("read_pcd", &read_pcd, "Reads a PCD file and returns a NumPy array");
     m.def("read_pcd_with_excluded_area", &read_pcd_with_excluded_area, "Reads a PCD file and returns a NumPy array outside the excluded area");
+    m.def("extract_ground", &extract_ground, "extract ground");
     m.def("read_pcd_with_prefiltering", &read_pcd_with_prefiltering, "Reads a PCD file and returns a prefiltering NumPy array ");
     m.def("read_pcd_with_excluded_area_read_ratio", &read_pcd_with_excluded_area_read_ratio, "Reads a PCD file and returns a NumPy array outside the excluded area and downsample to given ratio");
     m.def("save_MAP_pcd", &save_MAP_pcd, "Save a MAP PCD file from NumPy arrays");
@@ -889,5 +942,5 @@ PYBIND11_MODULE(imo_pcd_reader, m) {
     m.def("generate_whole_map", &generate_whole_map, "Downsample and concatenate multiple frames pcd to generate the whole map");
     m.def("generate_2d_map", &generate_2d_map, "Generate X-Y palne 2d map from the whole map for labeling");
     m.def("ground_plane_fitting", &ground_plane_fitting<PointMAP>, "ground plane fitting");
-    m.def("ground_plane_fitting", &ground_plane_fitting<PointAL>, "ground plane fitting");
+    m.def("ground_plane_fitting", &ground_plane_fitting<PointIMO>, "ground plane fitting");
 }
