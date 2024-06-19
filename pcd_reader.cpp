@@ -653,6 +653,7 @@ void generate_whole_map(std::vector<std::string> &pcd_pth,
         if(pcd_i % 10 == 0)
             std::cout<<pcd_i+1<<"/"<<pcd_pth.size()<<", ";
     }
+    std::cout << std::endl;
 
     pcl::io::savePCDFileBinary(filename, *final_cloud);
     pcl::io::savePCDFileBinary(ground_map_file, *final_ground_cloud);
