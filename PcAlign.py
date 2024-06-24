@@ -9,7 +9,7 @@ import argparse
 import glob
 from datetime import datetime
 import shutil
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, parallel_backend
 
 import json
 import numpy as np
@@ -41,11 +41,12 @@ parser.add_argument("--keep_mid_pcds", action="store_true", default=False,
 args = parser.parse_args()
 
 # dataset
-correct_pcd_channel = "lidarFusion_pcd"
+correct_pcd_channel = "lidarTop"
 dummy_pcdname = "dummy.pcd"
 data_list_file_dir = glob.glob(os.path.join(args.slam_paras_file_dir, "*_pcs_data_path.csv"))[0]
 df = pd.read_csv(data_list_file_dir)
 tmp_scan_paths = df['File Path'].tolist()
+
 scan_paths = []
 scan_names = []
 for pc_path in tmp_scan_paths:
@@ -140,12 +141,21 @@ def cloud_transform(mat, scan_path, out_name, save_dir, excluded_area, ceiling_h
         aug_coord = np.hstack((coord, new_column))
         trans_coord = mat.dot(aug_coord.T)
         out_coord = trans_coord.T[:, :3]
+
+        ground_scan = imo_pcd_reader.extract_ground(scan)
+        ground_coord = ground_scan[:, :3]
+        ground_intensities = ground_scan[:, -1]
+        ground_new_column = np.ones((ground_coord.shape[0], 1))
+        ground_aug_coord = np.hstack((ground_coord, ground_new_column))
+        ground_trans_coord = mat.dot(ground_aug_coord.T)
+        ground_out_coord = ground_trans_coord.T[:, :3]
+
         if args.no_assign_colors:
             rgbs = np.ones((coord.shape[0], 3))
         else:
             rgbs = assign_colors_from_image(coord, scan_path)
         save_pcd_path = os.path.join(save_dir, out_name)
-        imo_pcd_reader.save_MAP_pcd(out_coord, rgbs, intensities, save_pcd_path)
+        imo_pcd_reader.save_MAP_pcd(out_coord, rgbs, intensities, ground_out_coord, ground_intensities, save_pcd_path)
 
 all_matrices = read_csv_to_matrices(pose_file_dir)
 excluded_area = np.array([[-1.03, 3.863], [-1, 1]])
@@ -170,23 +180,26 @@ geohash_file = os.path.basename(data_list_file_dir)
 parts = geohash_file.split('_')
 fname_prefix = parts[0] + '_' + parts[1] + '_' + parts[2] + '_' + parts[3]
 
-Parallel(n_jobs=-1)(delayed(cloud_transform)(mat, scan_path, out_name, save_dir, excluded_area, ceiling_height) 
+with parallel_backend('loky'): Parallel(n_jobs=-1)(delayed(cloud_transform)(mat, scan_path, out_name, save_dir, excluded_area, ceiling_height) 
                                                 for mat, scan_path, out_name in zip(all_matrices, scan_paths, scan_names))
 
 # save whole map to pcd
 pcd_list = glob.glob(os.path.join(save_dir, "*.pcd"))
 whole_map_dir = os.path.join(os.path.abspath(os.path.join(save_dir, os.pardir)), "whole_map.pcd")
+whole_ground_map_dir = os.path.join(os.path.abspath(os.path.join(save_dir, os.pardir)), "whole_ground_map.pcd")
 save_ratio = 0.3
-imo_pcd_reader.generate_whole_map(pcd_list, save_ratio, whole_map_dir)
+imo_pcd_reader.generate_whole_map(pcd_list, save_ratio, whole_map_dir, whole_ground_map_dir)
 
 # generate 2d map for labeling
 resolution = 0.05
 mapdir, mapfilename = os.path.split(whole_map_dir)
 img_rgb = os.path.join(mapdir, fname_prefix + "_rgb.png")
-img_intensity = os.path.join(mapdir, fname_prefix + "_intensity.png")
-height_data = os.path.join(mapdir, fname_prefix + "_height.csv")
+img_intensity = os.path.join(mapdir, fname_prefix + "_source.png")
+ground_img_intensity = os.path.join(mapdir, fname_prefix + "_intensity.png")
+height_data = os.path.join(mapdir, fname_prefix + "_source_altitude.csv")
+ground_height_data = os.path.join(mapdir, fname_prefix + "_height.csv")
 origin_point = os.path.join(mapdir, fname_prefix + "_origin_point.csv")
-imo_pcd_reader.generate_2d_map(whole_map_dir, g_range, resolution, img_rgb, img_intensity, height_data, origin_point)
+imo_pcd_reader.generate_2d_map(whole_map_dir, whole_ground_map_dir, g_range, resolution, img_rgb, img_intensity, ground_img_intensity, height_data, ground_height_data, origin_point)
 
 pcs_data_path = os.path.join(mapdir, fname_prefix + "_pcs_data_path.csv")
 local2global_pose = os.path.join(mapdir, fname_prefix + "_local2global_pose.csv")
@@ -213,7 +226,10 @@ if not args.keep_mid_pcds:
 
     try:
         os.remove(whole_map_dir)
+        os.remove(whole_ground_map_dir)
     except FileNotFoundError:
         print(f"File not found: {whole_map_dir}")
+        print(f"File not found: {whole_ground_map_dir}")
     except PermissionError:
         print(f"Permission denied: {whole_map_dir}")
+        print(f"Permission denied: {whole_ground_map_dir}")
