@@ -40,12 +40,13 @@ parser.add_argument("--keep_mid_pcds", action="store_true", default=False,
 
 args = parser.parse_args()
 
+align_frames = 100
 # dataset
 correct_pcd_channel = "lidarTop"
 dummy_pcdname = "dummy.pcd"
 data_list_file_dir = glob.glob(os.path.join(args.slam_paras_file_dir, "*_pcs_data_path.csv"))[0]
 df = pd.read_csv(data_list_file_dir)
-tmp_scan_paths = df['File Path'].tolist()
+tmp_scan_paths = df['File Path'].tolist()[:align_frames]
 
 scan_paths = []
 scan_names = []
@@ -76,12 +77,16 @@ sub_folder = "lane"
 save_dir = os.path.join("result_pcd", project_name, sub_folder, seq_name, "pcds")
 if not os.path.exists(save_dir): os.makedirs(save_dir)
 
-def read_csv_to_matrices(filename):
+def read_csv_to_matrices(filename, align_frames):
     matrices = []
     current_matrix_rows = []
     with open(filename, 'r') as csvfile:
         reader = csv.reader(csvfile)
+        count_frame = 1
         for row in reader:
+            if count_frame > align_frames:
+                break
+            count_frame += 1
             current_matrix_rows.append([float(num) for num in row])  # Convert to floats
             matrices.append(np.array(current_matrix_rows).reshape((4, 4)))
             current_matrix_rows = []  # Reset for the next matrix
@@ -157,7 +162,7 @@ def cloud_transform(mat, scan_path, out_name, save_dir, excluded_area, ceiling_h
         save_pcd_path = os.path.join(save_dir, out_name)
         imo_pcd_reader.save_MAP_pcd(out_coord, rgbs, intensities, ground_out_coord, ground_intensities, save_pcd_path)
 
-all_matrices = read_csv_to_matrices(pose_file_dir)
+all_matrices = read_csv_to_matrices(pose_file_dir, align_frames)
 excluded_area = np.array([[-1.03, 3.863], [-1, 1]])
 ceiling_height = 2
 
@@ -204,7 +209,13 @@ imo_pcd_reader.generate_2d_map(whole_map_dir, whole_ground_map_dir, g_range, res
 pcs_data_path = os.path.join(mapdir, fname_prefix + "_pcs_data_path.csv")
 local2global_pose = os.path.join(mapdir, fname_prefix + "_local2global_pose.csv")
 
-copy_file(pose_file_dir, local2global_pose)
+# copy_file(pose_file_dir, local2global_pose)
+pose_list_to_stack = []
+for matrices in all_matrices:
+    pose_list_to_stack.append(matrices.flatten())
+final_pose_list = np.vstack(pose_list_to_stack)        
+np.savetxt(local2global_pose, final_pose_list, delimiter=",")
+
 with open(pcs_data_path, "w", newline="") as csvfile:
     writer = csv.writer(csvfile)
     for pc_path in tmp_scan_paths:
