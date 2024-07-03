@@ -188,7 +188,8 @@ pcd_list = glob.glob(os.path.join(save_dir, "*.pcd"))
 whole_map_dir = os.path.join(os.path.abspath(os.path.join(save_dir, os.pardir)), "whole_map.pcd")
 whole_ground_map_dir = os.path.join(os.path.abspath(os.path.join(save_dir, os.pardir)), "whole_ground_map.pcd")
 save_ratio = 0.3
-imo_pcd_reader.generate_whole_map(pcd_list, save_ratio, whole_map_dir, whole_ground_map_dir)
+imo_pcd_reader.generate_whole_map(pcd_list, save_ratio, whole_map_dir)
+imo_pcd_reader.generate_whole_ground_map(pcd_list, whole_ground_map_dir)
 
 # generate 2d map for labeling
 resolution = 0.05

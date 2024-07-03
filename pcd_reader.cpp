@@ -550,7 +550,7 @@ void save_MAP_pcd(py::array_t<float> &coords,
                   py::array_t<float> &intensities,
                   py::array_t<float> &ground_coords,
                   py::array_t<float> &ground_intensities,
-                  const std::string &filename) {
+                  std::string &filename) {
     // Ensure NumPy arrays have the right shapes and types
     if (coords.ndim() != 2 || coords.shape(1) != 3)
         throw std::runtime_error("Coords array must have shape (N, 3)");
@@ -601,22 +601,17 @@ void save_MAP_pcd(py::array_t<float> &coords,
     }
 
     // Save the PCD file
-    pcl::io::savePCDFileBinary(filename + "_ground.pcd", ground_cloud);
+    filename.replace(filename.find(".pcd"), 4, "_ground.pcd");
+    pcl::io::savePCDFileBinary(filename, ground_cloud);
 }
 
 void generate_whole_map(std::vector<std::string> &pcd_pth,
-                        float save_ratio,
-                        const std::string &filename, const std::string &ground_map_file) {
+                        float save_ratio, const std::string &filename) {
     pcl::PointCloud<PointMAP>::Ptr final_cloud (new pcl::PointCloud<PointMAP>);
-    pcl::PointCloud<PointMAP>::Ptr final_ground_cloud (new pcl::PointCloud<PointMAP>);
     for(size_t pcd_i=0; pcd_i<pcd_pth.size(); ++pcd_i){
         pcl::PointCloud<PointMAP>::Ptr cloud (new pcl::PointCloud<PointMAP>);
-        pcl::PointCloud<PointMAP>::Ptr ground_cloud(new pcl::PointCloud<PointMAP>);
         if (pcd_pth[pcd_i].find("_ground.pcd") != std::string::npos) {
-            if (pcl::io::loadPCDFile<PointMAP>(pcd_pth[pcd_i], *ground_cloud) == -1) {
-                throw std::runtime_error("无法读取PCD文件, 请检查路径! " + pcd_pth[pcd_i]);
-                return;
-            }
+            continue;
         } else {
             if (pcl::io::loadPCDFile<PointMAP>(pcd_pth[pcd_i], *cloud) == -1) {
                 throw std::runtime_error("无法读取PCD文件, 请检查路径! " + pcd_pth[pcd_i]);
@@ -649,13 +644,31 @@ void generate_whole_map(std::vector<std::string> &pcd_pth,
 
         // Concatenate the point clouds
         *final_cloud += *DScloud;
-        *final_ground_cloud += *ground_cloud;
         if(pcd_i % 10 == 0)
             std::cout<<pcd_i+1<<"/"<<pcd_pth.size()<<", ";
     }
     std::cout << std::endl;
 
     pcl::io::savePCDFileBinary(filename, *final_cloud);
+}
+
+void generate_whole_ground_map(std::vector<std::string> &pcd_pth, const std::string &ground_map_file) {
+    pcl::PointCloud<PointMAP>::Ptr final_ground_cloud (new pcl::PointCloud<PointMAP>);
+    for(size_t pcd_i=0; pcd_i<pcd_pth.size(); ++pcd_i){
+        pcl::PointCloud<PointMAP>::Ptr ground_cloud(new pcl::PointCloud<PointMAP>);
+        if (pcd_pth[pcd_i].find("_ground.pcd") != std::string::npos) {
+            if (pcl::io::loadPCDFile<PointMAP>(pcd_pth[pcd_i], *ground_cloud) == -1) {
+                throw std::runtime_error("无法读取PCD文件, 请检查路径! " + pcd_pth[pcd_i]);
+                return;
+            }
+        }
+
+        // Concatenate the point clouds
+        *final_ground_cloud += *ground_cloud;
+        if(pcd_i % 10 == 0)
+            std::cout<<pcd_i+1<<"/"<<pcd_pth.size()<<", ";
+    }
+    std::cout << std::endl;
     pcl::io::savePCDFileBinary(ground_map_file, *final_ground_cloud);
 }
 
@@ -941,6 +954,7 @@ PYBIND11_MODULE(imo_pcd_reader, m) {
     m.def("performNDT", &performNDT, "Perform NDT using NumPy arrays");
     m.def("assign_colors", &assign_colors, "Assign colors for point cloud from images");
     m.def("generate_whole_map", &generate_whole_map, "Downsample and concatenate multiple frames pcd to generate the whole map");
+    m.def("generate_whole_ground_map", &generate_whole_ground_map, "concatenate multiple frames pcd to generate the whole ground map");
     m.def("generate_2d_map", &generate_2d_map, "Generate X-Y palne 2d map from the whole map for labeling");
     m.def("ground_plane_fitting", &ground_plane_fitting<PointMAP>, "ground plane fitting");
     m.def("ground_plane_fitting", &ground_plane_fitting<PointIMO>, "ground plane fitting");
