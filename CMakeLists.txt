@@ -26,6 +26,10 @@ include_directories(${OpenCV_INCLUDE_DIRS})
 # Add your C++ source file
 add_library(${PROJECT_NAME} MODULE pcd_reader.cpp)
 
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    DEBUG_MODE=$<CONFIG:Debug>
+)
+
 # Link against necessary libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE 
                       ${PCL_LIBRARIES}

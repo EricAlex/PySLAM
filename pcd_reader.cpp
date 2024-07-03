@@ -241,7 +241,9 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
     extract.setNegative (false);
     extract.filter(*outlier_cloud);
 
-    std::cout << "ransac points size: " << inlier_cloud->points.size() << std::endl;
+    #if DEBUG_MODE
+        std::cout << "ransac points size: " << inlier_cloud->points.size() << std::endl;
+    #endif
     
     *out_filtered += *outlier_cloud;
     if (!out_filtered->points.empty() && !inlier_cloud->points.empty()) {
@@ -265,7 +267,9 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
         );
         float variance = sum_of_squares / distances.size();
         float sigma = std::sqrt(variance);
-        std::cout << "sigma: " << sigma << std::endl;
+        #if DEBUG_MODE
+            std::cout << "sigma: " << sigma << std::endl;
+        #endif
         for (auto &p : out_filtered->points) {
             auto dist = point_to_plane_dist(p.x, p.y, p.z, floor_coeffs);
             if (std::fabs(dist) <= 0.2) {
@@ -273,7 +277,9 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
             }
         }
     }
-    std::cout << "result cloud points size: " << inlier_cloud->points.size() << std::endl;
+    #if DEBUG_MODE
+        std::cout << "result cloud points size: " << inlier_cloud->points.size() << std::endl;
+    #endif
     pcl::copyPointCloud(*inlier_cloud, *result_cloud);
     return result_cloud;
 }
@@ -645,7 +651,7 @@ void generate_whole_map(std::vector<std::string> &pcd_pth,
         // Concatenate the point clouds
         *final_cloud += *DScloud;
         if(pcd_i % 10 == 0)
-            std::cout<<pcd_i+1<<"/"<<pcd_pth.size()<<", ";
+            std::cout<<"\r"<<pcd_i+1<<"/"<<pcd_pth.size();
     }
     std::cout << std::endl;
 
@@ -661,12 +667,14 @@ void generate_whole_ground_map(std::vector<std::string> &pcd_pth, const std::str
                 throw std::runtime_error("无法读取PCD文件, 请检查路径! " + pcd_pth[pcd_i]);
                 return;
             }
+        }else{
+            continue;
         }
 
         // Concatenate the point clouds
         *final_ground_cloud += *ground_cloud;
         if(pcd_i % 10 == 0)
-            std::cout<<pcd_i+1<<"/"<<pcd_pth.size()<<", ";
+            std::cout<<"\r"<<pcd_i+1<<"/"<<pcd_pth.size();
     }
     std::cout << std::endl;
     pcl::io::savePCDFileBinary(ground_map_file, *final_ground_cloud);
