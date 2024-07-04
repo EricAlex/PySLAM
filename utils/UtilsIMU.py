@@ -6,104 +6,7 @@ import math
 from datetime import datetime
 import time
 from scipy.spatial.transform import Rotation as R
-
-def matrix_to_euler(matrix):
-    """
-    Extracts yaw, pitch, and roll angles from a transformation matrix.
-
-    Args:
-        matrix (numpy.ndarray): The 4x4 transformation matrix.
-
-    Returns:
-        A tuple containing yaw, pitch, and roll angles in radians.
-    """
-    R = matrix[:3, :3]  # Extract the rotation submatrix
-
-    # Check for gimbal lock conditions
-    if np.isclose(R[0, 2], 1):  # Gimbal lock at pitch = +90 degrees
-        yaw = np.arctan2(R[2, 1], R[2, 2])
-        pitch = np.pi / 2  
-        roll = 0
-    elif np.isclose(R[0, 2], -1):  # Gimbal lock at pitch = -90 degrees
-        yaw = np.arctan2(-R[2, 1], -R[2, 2])
-        pitch = -np.pi / 2
-        roll = 0
-    else:
-        # General case
-        yaw = np.arctan2(R[1, 0], R[0, 0])
-        pitch = np.arcsin(-R[2, 0])
-        roll = np.arctan2(R[2, 1], R[2, 2])
-
-    return yaw, pitch, roll
-
-def create_rotation_matrix(yaw, pitch, roll):
-    """Creates a 3x3 rotation matrix from yaw, pitch, and roll angles (in radians)."""
-
-    yaw, pitch, roll = np.radians([yaw, pitch, roll])
-
-    # Pre-calculate sine and cosine values for efficiency
-    cos_yaw, sin_yaw = np.cos(yaw), np.sin(yaw)
-    cos_pitch, sin_pitch = np.cos(pitch), np.sin(pitch)
-    cos_roll, sin_roll = np.cos(roll), np.sin(roll)
-
-    # Construct the rotation matrix
-    R_z = np.array([  # Yaw rotation
-        [cos_yaw, -sin_yaw, 0],
-        [sin_yaw, cos_yaw, 0],
-        [0, 0, 1]
-    ])
-
-    R_y = np.array([  # Pitch rotation
-        [cos_pitch, 0, sin_pitch],
-        [0, 1, 0],
-        [-sin_pitch, 0, cos_pitch]
-    ])
-
-    R_x = np.array([  # Roll rotation
-        [1, 0, 0],
-        [0, cos_roll, -sin_roll],
-        [0, sin_roll, cos_roll]
-    ])
-
-    # Combine the rotations (order matters!)
-    R = R_z @ R_y @ R_x  # Z-Y-X order (most common for yaw-pitch-roll)
-
-    return R
-
-def create_transformation_matrix(yaw, pitch, roll, x, y, z):
-    """Creates a 4x4 transformation matrix from yaw, pitch, roll, and XYZ translations."""
-
-    # Convert angles to radians
-    yaw, pitch, roll = np.radians([yaw, pitch, roll])
-
-    # Rotation matrices around X, Y, and Z axes
-    R_x = np.array([
-        [1, 0, 0],
-        [0, np.cos(roll), -np.sin(roll)],
-        [0, np.sin(roll), np.cos(roll)]
-    ])
-
-    R_y = np.array([
-        [np.cos(pitch), 0, np.sin(pitch)],
-        [0, 1, 0],
-        [-np.sin(pitch), 0, np.cos(pitch)]
-    ])
-
-    R_z = np.array([
-        [np.cos(yaw), -np.sin(yaw), 0],
-        [np.sin(yaw), np.cos(yaw), 0],
-        [0, 0, 1]
-    ])
-
-    # Combined rotation matrix
-    R = np.dot(R_z, np.dot(R_y, R_x))
-
-    # Create the transformation matrix
-    T = np.eye(4)  # Initialize as identity matrix
-    T[:3, :3] = R   # Insert rotation matrix
-    T[:3, 3] = [x, y, z]  # Insert translation vector
-
-    return T
+import pymap3d as pm
 
 def datetime_to_timestamp(dt_name):
     parts = dt_name.split('_')
@@ -122,9 +25,19 @@ class IMUPose:
 
     def getGPS(self, query_datetime):
         query_timestamp = datetime_to_timestamp(query_datetime)
-        index ,query_entry = self.find_closest_entry(query_timestamp)
+        index, query_entry = self.find_closest_entry(query_timestamp)
         if query_entry is not None:
-            return query_entry['Latitude[°]'], query_entry['Longitude[°]'], query_entry['Altitude[m]']
+            columns_to_check = ['Longitude[°]', 'Latitude[°]', 'Altitude[m]']
+            is_numeric = True
+            for col in columns_to_check:
+                try:
+                    converted_col = pd.to_numeric(query_entry[col], errors='coerce')
+                except ValueError:
+                    is_numeric = False
+            if is_numeric:
+                return query_entry['Latitude[°]'], query_entry['Longitude[°]'], query_entry['Altitude[m]']
+            else:
+                return None, None, None
         else:
             return None, None, None
 
@@ -193,32 +106,48 @@ class IMUPose:
         ref_index, ref_entry = self.find_closest_entry(ref_timestamp)
         query_index, query_entry = self.find_closest_entry(query_timestamp)
         if ref_entry is not None and query_entry is not None:
-            # x, y, z = self._gps_to_enu(ref_entry['Longitude[°]'], ref_entry['Latitude[°]'], ref_entry['Altitude[m]'],
-            #                     query_entry['Longitude[°]'], query_entry['Latitude[°]'], query_entry['Altitude[m]'])
-            # yaw = query_entry['Orientation[°]'] - ref_entry['Orientation[°]']
-            # pitch = query_entry['Pitch angle[°]'] - ref_entry['Pitch angle[°]']
-            # roll = query_entry['Roll angle[°]'] - ref_entry['Roll angle[°]']
-            # enu2ref = create_rotation_matrix(ref_entry['Orientation[°]'], ref_entry['Pitch angle[°]'], ref_entry['Roll angle[°]'])
-            # ref_trans = np.dot(enu2ref, np.array([x, y, z]))
-            # return create_transformation_matrix(-yaw, -pitch, -roll, -ref_trans[0], -ref_trans[1], -ref_trans[2])
-
-            x, y, z = self._gps_to_enu(ref_entry['Longitude[°]'], ref_entry['Latitude[°]'], ref_entry['Altitude[m]'],
-                                query_entry['Longitude[°]'], query_entry['Latitude[°]'], query_entry['Altitude[m]'])
-            yaw = query_entry['Orientation[°]'] - ref_entry['Orientation[°]']
-            pitch = query_entry['Pitch angle[°]'] - ref_entry['Pitch angle[°]']
-            roll = query_entry['Roll angle[°]'] - ref_entry['Roll angle[°]']
-            enu2ref = create_rotation_matrix(ref_entry['Orientation[°]'], ref_entry['Pitch angle[°]'], ref_entry['Roll angle[°]'])
-            ref_speed = 5/18 * ref_entry['Speed[KPH]']
-            query_speed = 5/18 * query_entry['Speed[KPH]']
-            delta_time = float(query_timestamp - ref_timestamp)/1e9
-            ref_trans = np.dot(enu2ref, np.array([x, y, z]))
-            move_dist = abs(0.5*(ref_speed + query_speed)*delta_time)
-            trans_norm = np.linalg.norm(ref_trans)
-            if np.isclose(trans_norm, 0, 1e-4):
-                gain = 1
+            columns_to_check = ['Longitude[°]', 'Latitude[°]', 'Altitude[m]']
+            is_numeric = True
+            for col in columns_to_check:
+                try:
+                    converted_col = pd.to_numeric(query_entry[col], errors='coerce')
+                except ValueError:
+                    is_numeric = False
+                try:
+                    converted_col = pd.to_numeric(ref_entry[col], errors='coerce')
+                except ValueError:
+                    is_numeric = False
+            if not is_numeric:
+                return None
             else:
-                gain = move_dist/trans_norm
-            return create_transformation_matrix(-yaw, -pitch, -roll, -ref_trans[0]*gain, -ref_trans[1]*gain, -ref_trans[2]*gain)
+                east, north, up = self._gps_to_enu(ref_entry['Longitude[°]'], ref_entry['Latitude[°]'], ref_entry['Altitude[m]'],
+                                    query_entry['Longitude[°]'], query_entry['Latitude[°]'], query_entry['Altitude[m]'])
+                yaw = query_entry['Orientation[°]'] - ref_entry['Orientation[°]']
+                pitch = query_entry['Pitch angle[°]'] - ref_entry['Pitch angle[°]']
+                roll = query_entry['Roll angle[°]'] - ref_entry['Roll angle[°]']
+                ref_Orientation = ref_entry['Orientation[°]']
+                if ref_Orientation < 0:
+                    ref_Orientation += 360
+                enu2ref = R.from_euler('zyx', [ref_Orientation, ref_entry['Pitch angle[°]'], ref_entry['Roll angle[°]']], degrees=True).as_matrix()
+                ref_speed = 5/18 * ref_entry['Speed[KPH]']
+                query_speed = 5/18 * query_entry['Speed[KPH]']
+                delta_time = float(query_timestamp - ref_timestamp)/1e9
+                ref_trans = enu2ref @ np.array([north, east, up])
+                move_dist = abs(0.5*(ref_speed + query_speed)*delta_time)
+                trans_norm = np.linalg.norm(ref_trans)
+                if np.isclose(trans_norm, 0, 1e-4):
+                    gain = 1
+                else:
+                    gain = move_dist/trans_norm
+                if yaw > 180:
+                    yaw -= 360
+                if yaw < -180:
+                    yaw += 360
+                T = np.eye(4)
+                T[:3, :3] = R.from_euler('zyx', [-yaw, -pitch, -roll], degrees=True).as_matrix()
+                # T[:3, 3] = [-ref_trans[1]*gain, -ref_trans[0]*gain, ref_trans[2]*gain]
+                T[:3, 3] = [-ref_trans[1]*gain, 0, ref_trans[2]*gain]
+                return T
         else:
             return None
 
@@ -252,17 +181,7 @@ class IMUPose:
             else:
                 return None, None
 
-    def _gps_to_enu(self, lat0, lon0, h0, lat, lon, h):
-        # Convert degrees to radians
-        lat0_rad = math.radians(lat0)
-        lon0_rad = math.radians(lon0)
-        lat_rad = math.radians(lat)
-        lon_rad = math.radians(lon)
+    def _gps_to_enu(self, ref_lon, ref_lat, ref_alt, target_lon, target_lat, target_alt):
+        enu2 = pm.geodetic2enu(target_lon, target_lat, target_alt, ref_lon, ref_lat, ref_alt)
         
-        dlat = lat_rad - lat0_rad
-        dlon = lon_rad - lon0_rad
-        
-        x = self.R * dlon * math.cos(lat0_rad)
-        y = self.R * dlat
-        z = h - h0
-        return x, y, z
+        return enu2[0], enu2[1], enu2[2]

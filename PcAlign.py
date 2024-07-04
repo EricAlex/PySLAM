@@ -15,6 +15,7 @@ import json
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from tqdm.contrib import tzip
 from scipy.spatial.transform import Rotation as R
 
 import utils.UtilsPointcloud as Ptutils
@@ -181,7 +182,7 @@ parts = geohash_file.split('_')
 fname_prefix = parts[0] + '_' + parts[1] + '_' + parts[2] + '_' + parts[3]
 
 with parallel_backend('loky'): Parallel(n_jobs=-1)(delayed(cloud_transform)(mat, scan_path, out_name, save_dir, excluded_area, ceiling_height) 
-                                                for mat, scan_path, out_name in zip(all_matrices, scan_paths, scan_names))
+                                                for mat, scan_path, out_name in tzip(all_matrices, scan_paths, scan_names, desc="Points transforming"))
 
 # save whole map to pcd
 pcd_list = glob.glob(os.path.join(save_dir, "*.pcd"))

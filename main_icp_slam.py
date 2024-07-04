@@ -357,8 +357,8 @@ for scan_paths in pcd_segments:
                     sec_e = (sec+1)*smf+1
                 sec_scan_paths.append(scan_paths[sec_s:sec_e])
         
-            with parallel_backend('loky'): results = Parallel(n_jobs=4)(delayed(subMap)(sec_paths, for_idx) for for_idx, sec_paths in enumerate(sec_scan_paths))
-            with parallel_backend('loky'): sec_results = Parallel(n_jobs=4)(delayed(alignSections)(result, sec_paths, for_idx, results[for_idx+1], sec_scan_paths[for_idx+1], for_idx+1) 
+            with parallel_backend('loky'): results = Parallel(n_jobs=-1)(delayed(subMap)(sec_paths, for_idx) for for_idx, sec_paths in enumerate(sec_scan_paths))
+            with parallel_backend('loky'): sec_results = Parallel(n_jobs=-1)(delayed(alignSections)(result, sec_paths, for_idx, results[for_idx+1], sec_scan_paths[for_idx+1], for_idx+1) 
                                                 for for_idx, (result, sec_paths) in enumerate(zip(results[:-1], sec_scan_paths[:-1])))
             
             pose_list_to_stack = [results[0][:-1,:]]
