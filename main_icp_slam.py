@@ -420,4 +420,3 @@ for scan_paths in pcd_segments:
             writer = csv.writer(csvfile)
             for for_idx, ts in enumerate(scan_ts):
                 writer.writerow([ts] + final_pose_list[for_idx, :].tolist())
-
