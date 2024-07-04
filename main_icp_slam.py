@@ -215,19 +215,16 @@ def subMap(scan_paths, seg_idx):
         c_d_th = 0.8
         if args.indoor:
             final_transformation, has_converged, fitness_score = imo_pcd_reader.performNDT(curr_scan_pts, prev_scan_pts, icp_initial, 0.2, 0.4, 0.01, 0.1, 50)
-            if fitness_score > c_d_th and imu_init_guess is not None:
-                new_init_guess = np.dot(icp_initial, imu_init_guess)
-                imu_final_transformation, imu_has_converged, imu_fitness_score = imo_pcd_reader.performNDT(curr_scan_pts, prev_scan_pts, new_init_guess, 0.2, 0.4, 0.01, 0.1, 50)
-                logger.warning(f"seg_idx: {seg_idx}, idx: {for_idx}, fitness_score: {fitness_score}, imu_fitness_score: {imu_fitness_score}")
+            if fitness_score > c_d_th and pose_trans is not None:
+                imu_final_transformation, imu_has_converged, imu_fitness_score = imo_pcd_reader.performNDT(curr_scan_pts, prev_scan_pts, pose_trans, 0.2, 0.4, 0.01, 0.1, 50)
                 if imu_fitness_score < fitness_score:
-                    logger.warning(f"seg_idx: {seg_idx}, idx: {for_idx}, lidar odometry fitness_score too high, IMU recalculated fitness_score: {imu_fitness_score}")
+                    logger.warning(f"seg_idx: {seg_idx}, idx: {for_idx}, lidar odometry fitness_score too high {fitness_score}, IMU recalculated fitness_score: {imu_fitness_score}")
                     final_transformation = imu_final_transformation
                     fitness_score = imu_fitness_score
         else:
             fitness_score = None
             if pose_trans is not None:
                 final_transformation, has_converged, fitness_score = imo_pcd_reader.performNDT(curr_scan_pts, prev_scan_pts, pose_trans, 0.2, 0.4, 0.01, 0.1, 50)
-                logger.info(f"seg_idx: {seg_idx}, idx: {for_idx}, has_converged: {has_converged}, fitness_score: {fitness_score}")
 
             if fitness_score is None:
                 final_transformation, has_converged, fitness_score = imo_pcd_reader.performNDT(curr_scan_pts, prev_scan_pts, icp_initial, 0.2, 0.4, 0.01, 0.1, 50)
@@ -236,7 +233,7 @@ def subMap(scan_paths, seg_idx):
                 if fitness_score > c_d_th:
                     odom_final_transformation, odom_has_converged, odom_fitness_score = imo_pcd_reader.performNDT(curr_scan_pts, prev_scan_pts, icp_initial, 0.2, 0.4, 0.01, 0.1, 50)
                     if odom_fitness_score < fitness_score:
-                        logger.warning(f"seg_idx: {seg_idx}, idx: {for_idx}, fitness_score too high, maybe GPS is unreliable, lidar odometry recalculated fitness_score: {odom_fitness_score}")
+                        logger.warning(f"seg_idx: {seg_idx}, idx: {for_idx}, fitness_score too high {fitness_score}, maybe GPS is unreliable, lidar odometry recalculated fitness_score: {odom_fitness_score}")
                         final_transformation = odom_final_transformation
                         fitness_score = odom_fitness_score
 
@@ -360,8 +357,8 @@ for scan_paths in pcd_segments:
                     sec_e = (sec+1)*smf+1
                 sec_scan_paths.append(scan_paths[sec_s:sec_e])
         
-            with parallel_backend('loky'): results = Parallel(n_jobs=-1)(delayed(subMap)(sec_paths, for_idx) for for_idx, sec_paths in enumerate(sec_scan_paths))
-            with parallel_backend('loky'): sec_results = Parallel(n_jobs=-1)(delayed(alignSections)(result, sec_paths, for_idx, results[for_idx+1], sec_scan_paths[for_idx+1], for_idx+1) 
+            with parallel_backend('loky'): results = Parallel(n_jobs=4)(delayed(subMap)(sec_paths, for_idx) for for_idx, sec_paths in enumerate(sec_scan_paths))
+            with parallel_backend('loky'): sec_results = Parallel(n_jobs=4)(delayed(alignSections)(result, sec_paths, for_idx, results[for_idx+1], sec_scan_paths[for_idx+1], for_idx+1) 
                                                 for for_idx, (result, sec_paths) in enumerate(zip(results[:-1], sec_scan_paths[:-1])))
             
             pose_list_to_stack = [results[0][:-1,:]]
@@ -423,4 +420,3 @@ for scan_paths in pcd_segments:
             writer = csv.writer(csvfile)
             for for_idx, ts in enumerate(scan_ts):
                 writer.writerow([ts] + final_pose_list[for_idx, :].tolist())
-
