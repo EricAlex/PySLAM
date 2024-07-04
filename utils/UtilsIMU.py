@@ -25,9 +25,19 @@ class IMUPose:
 
     def getGPS(self, query_datetime):
         query_timestamp = datetime_to_timestamp(query_datetime)
-        index ,query_entry = self.find_closest_entry(query_timestamp)
+        index, query_entry = self.find_closest_entry(query_timestamp)
         if query_entry is not None:
-            return query_entry['Latitude[°]'], query_entry['Longitude[°]'], query_entry['Altitude[m]']
+            columns_to_check = ['Longitude[°]', 'Latitude[°]', 'Altitude[m]']
+            is_numeric = True
+            for col in columns_to_check:
+                try:
+                    converted_col = pd.to_numeric(query_entry[col], errors='coerce')
+                except ValueError:
+                    is_numeric = False
+            if is_numeric:
+                return query_entry['Latitude[°]'], query_entry['Longitude[°]'], query_entry['Altitude[m]']
+            else:
+                return None, None, None
         else:
             return None, None, None
 
@@ -96,29 +106,48 @@ class IMUPose:
         ref_index, ref_entry = self.find_closest_entry(ref_timestamp)
         query_index, query_entry = self.find_closest_entry(query_timestamp)
         if ref_entry is not None and query_entry is not None:
-            east, north, up = self._gps_to_enu(ref_entry['Longitude[°]'], ref_entry['Latitude[°]'], ref_entry['Altitude[m]'],
-                                query_entry['Longitude[°]'], query_entry['Latitude[°]'], query_entry['Altitude[m]'])
-            yaw = query_entry['Orientation[°]'] - ref_entry['Orientation[°]']
-            pitch = query_entry['Pitch angle[°]'] - ref_entry['Pitch angle[°]']
-            roll = query_entry['Roll angle[°]'] - ref_entry['Roll angle[°]']
-            Orientation = ref_entry['Orientation[°]']
-            if Orientation < 0:
-                Orientation += 360
-            enu2ref = R.from_euler('zyx', [Orientation, ref_entry['Pitch angle[°]'], ref_entry['Roll angle[°]']], degrees=True).as_matrix()
-            ref_speed = 5/18 * ref_entry['Speed[KPH]']
-            query_speed = 5/18 * query_entry['Speed[KPH]']
-            delta_time = float(query_timestamp - ref_timestamp)/1e9
-            ref_trans = enu2ref @ np.array([north, east, up])
-            move_dist = abs(0.5*(ref_speed + query_speed)*delta_time)
-            trans_norm = np.linalg.norm(ref_trans)
-            if np.isclose(trans_norm, 0, 1e-4):
-                gain = 1
+            columns_to_check = ['Longitude[°]', 'Latitude[°]', 'Altitude[m]']
+            is_numeric = True
+            for col in columns_to_check:
+                try:
+                    converted_col = pd.to_numeric(query_entry[col], errors='coerce')
+                except ValueError:
+                    is_numeric = False
+                try:
+                    converted_col = pd.to_numeric(ref_entry[col], errors='coerce')
+                except ValueError:
+                    is_numeric = False
+            if not is_numeric:
+                return None
             else:
-                gain = move_dist/trans_norm
-            T = np.eye(4)
-            T[:3, :3] = R.from_euler('zyx', [yaw, pitch, roll], degrees=True).as_matrix()
-            T[:3, 3] = [-ref_trans[1]*gain, -ref_trans[0]*gain, ref_trans[2]*gain]
-            return T
+                east, north, up = self._gps_to_enu(ref_entry['Longitude[°]'], ref_entry['Latitude[°]'], ref_entry['Altitude[m]'],
+                                    query_entry['Longitude[°]'], query_entry['Latitude[°]'], query_entry['Altitude[m]'])
+                yaw = query_entry['Orientation[°]'] - ref_entry['Orientation[°]']
+                pitch = query_entry['Pitch angle[°]'] - ref_entry['Pitch angle[°]']
+                roll = query_entry['Roll angle[°]'] - ref_entry['Roll angle[°]']
+                ref_Orientation = ref_entry['Orientation[°]']
+                if ref_Orientation < 0:
+                    ref_Orientation += 360
+                enu2ref = R.from_euler('zyx', [ref_Orientation, ref_entry['Pitch angle[°]'], ref_entry['Roll angle[°]']], degrees=True).as_matrix()
+                ref_speed = 5/18 * ref_entry['Speed[KPH]']
+                query_speed = 5/18 * query_entry['Speed[KPH]']
+                delta_time = float(query_timestamp - ref_timestamp)/1e9
+                ref_trans = enu2ref @ np.array([north, east, up])
+                move_dist = abs(0.5*(ref_speed + query_speed)*delta_time)
+                trans_norm = np.linalg.norm(ref_trans)
+                if np.isclose(trans_norm, 0, 1e-4):
+                    gain = 1
+                else:
+                    gain = move_dist/trans_norm
+                if yaw > 180:
+                    yaw -= 360
+                if yaw < -180:
+                    yaw += 360
+                T = np.eye(4)
+                T[:3, :3] = R.from_euler('zyx', [-yaw, -pitch, -roll], degrees=True).as_matrix()
+                # T[:3, 3] = [-ref_trans[1]*gain, -ref_trans[0]*gain, ref_trans[2]*gain]
+                T[:3, 3] = [-ref_trans[1]*gain, 0, ref_trans[2]*gain]
+                return T
         else:
             return None
 
