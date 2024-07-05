@@ -658,7 +658,8 @@ void generate_whole_map(std::vector<std::string> &pcd_pth,
     pcl::io::savePCDFileBinary(filename, *final_cloud);
 }
 
-void generate_whole_ground_map(std::vector<std::string> &pcd_pth, const std::string &ground_map_file) {
+void generate_whole_ground_map(std::vector<std::string> &pcd_pth, float save_ratio,
+        const std::string &ground_map_file) {
     pcl::PointCloud<PointMAP>::Ptr final_ground_cloud (new pcl::PointCloud<PointMAP>);
     for(size_t pcd_i=0; pcd_i<pcd_pth.size(); ++pcd_i){
         pcl::PointCloud<PointMAP>::Ptr ground_cloud(new pcl::PointCloud<PointMAP>);
@@ -667,12 +668,34 @@ void generate_whole_ground_map(std::vector<std::string> &pcd_pth, const std::str
                 throw std::runtime_error("无法读取PCD文件, 请检查路径! " + pcd_pth[pcd_i]);
                 return;
             }
-        }else{
+        } else {
             continue;
+        }
+        if(save_ratio>1){
+            throw std::runtime_error("save_ratio 取值范围(0, 1)! ");
+            return;
+        }
+        std::vector<int> rand_idx;
+        int max_idx = ground_cloud->points.size() - 1;
+        select_random(max_idx, max_idx*save_ratio, rand_idx);
+
+        pcl::PointCloud<PointMAP>::Ptr DScloud(new pcl::PointCloud<PointMAP>);
+        DScloud->width = rand_idx.size();
+        DScloud->height = 1; // Unorganized
+        DScloud->is_dense = false;
+        DScloud->points.resize(DScloud->width * DScloud->height);
+        for(size_t i=0; i<rand_idx.size(); ++i){
+            DScloud->points[i].x = ground_cloud->points[rand_idx[i]].x;
+            DScloud->points[i].y = ground_cloud->points[rand_idx[i]].y;
+            DScloud->points[i].z = ground_cloud->points[rand_idx[i]].z;
+            DScloud->points[i].r = ground_cloud->points[rand_idx[i]].r;
+            DScloud->points[i].g = ground_cloud->points[rand_idx[i]].g;
+            DScloud->points[i].b = ground_cloud->points[rand_idx[i]].b;
+            DScloud->points[i].intensity = ground_cloud->points[rand_idx[i]].intensity;
         }
 
         // Concatenate the point clouds
-        *final_ground_cloud += *ground_cloud;
+        *final_ground_cloud += *DScloud;
         if(pcd_i % 10 == 0)
             std::cout<<"\r"<<pcd_i+1<<"/"<<pcd_pth.size();
     }
