@@ -189,7 +189,7 @@ def subMap(scan_paths, seg_idx):
         imu_init_guess = np.eye(4)
         if(for_idx > 0):
             pose_trans = pose.getTransformationMatrix(ref_timestamp, query_timestamp)
-            imu_init_guess = pose.getIMUInfo(ref_timestamp, query_timestamp)
+            # imu_init_guess = pose.getIMUInfo(ref_timestamp, query_timestamp)
 
         # get current information
         curr_scan_pts = Ptutils.readScan(scan_path)
@@ -270,7 +270,7 @@ def alignSections(target_poses, target_pc_paths, target_idx, source_poses, sourc
     setup_logging(log_file)
     excluded_area = np.array([[-1, 3], [-1, 1]])
     ceiling_height = 100
-    read_ratio = 2.0/len(target_pc_paths)
+    read_ratio = 3.0/len(target_pc_paths)
 
     target_matrices = [target_poses[i].reshape(4, 4) for i in range(target_poses.shape[0])]
     coord_to_stack = []
