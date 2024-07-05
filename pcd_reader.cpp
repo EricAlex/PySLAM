@@ -781,8 +781,8 @@ void generate_2d_map(const std::string &pcd_filename,
     float max_x = range_mat(0, 1);
     float min_y = range_mat(1, 0);
     float max_y = range_mat(1, 1);
-    int grid_width = int((max_x - min_x) / grid_resolution);
-    int grid_height = int((max_y - min_y) / grid_resolution);
+    int grid_height = int((max_x - min_x) / grid_resolution);
+    int grid_width = int((max_y - min_y) / grid_resolution);
     float nanValue = nan("");
     std::vector<std::vector<float>> r_grid(grid_height, std::vector<float>(grid_width, 0.0));
     std::vector<std::vector<float>> g_grid(grid_height, std::vector<float>(grid_width, 0.0));
