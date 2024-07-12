@@ -88,7 +88,11 @@ folder_paths = glob.glob(os.path.join(args.data_base_dir, "scene*"))
 folder_names = [os.path.basename(path) for path in folder_paths if os.path.isdir(path)]
 scene_names = sorted(folder_names, key=lambda x: int(x.replace("scene", "")))
 
-time_break_th = 1 # seconds
+time_break_th = 2 # seconds
+
+# miss_folder_paths = glob.glob(os.path.join(args.data_base_dir, "missscene*"))
+# miss_scene_names = [os.path.basename(path) for path in miss_folder_paths if os.path.isdir(path)]
+
 
 pcd_segments = []
 tmp_seg = []

@@ -13,4 +13,14 @@ for scene in `ls samples/`; do
     done
 done
 
+for scene in `ls missframe/`; do
+    for channel in `ls missframe/$scene/`; do
+        mkdir -p sweeps/miss$scene/$channel
+        for frame in `ls missframe/$scene/$channel/`; do
+            cp missframe/$scene/$channel/$frame sweeps/miss$scene/$channel/$frame &
+        done
+        wait
+    done
+done
+
 cd ..;

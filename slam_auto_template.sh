@@ -10,6 +10,12 @@ indoor=1
 subMapFrameNum_outdoor=20
 subMapFrameNum_indoor=80
 
+if [[ "${dataset}" == Parking* ]]; then
+    indoor=1
+else
+    indoor=0
+fi
+
 # # Download data
 
 # python lidar_dataset.py --config_dir cloud.yaml --cloud_type ${cloudType} --bucket ${downloadBucket} --prefix ${dataset} --dir_path ../${tmp_dir}
