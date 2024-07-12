@@ -54,24 +54,42 @@ class IMUPose:
             gyro_x_mean = 0.0
             gyro_y_mean = 0.0
             gyro_z_mean = 0.0
+            columns_to_check = ['Yaw rate[°/s]', 'Pitch rate[°/s]', 'Roll rate[°/s]', 
+                                'Acceleration-x[m/s2]', 'Acceleration-y[m/s2]', 'Acceleration-z[m/s2]']
+            is_numeric = True
             for imu_index in range(start_index, end_index):
                 query_entry = self.df.iloc[imu_index]
-                gyro_z = query_entry['Yaw rate[°/s]'] / 180.0 * 3.1415926
+                for col in columns_to_check:
+                    try:
+                        converted_col = float(query_entry[col])
+                    except ValueError:
+                        is_numeric = False
+                    try:
+                        converted_col = float(ref_entry[col])
+                    except ValueError:
+                        is_numeric = False
+            
+            if not is_numeric:
+                return None
+            
+            for imu_index in range(start_index, end_index):
+                query_entry = self.df.iloc[imu_index]
+                gyro_z = float(query_entry['Yaw rate[°/s]']) / 180.0 * 3.1415926
                 gyro_z_mean += gyro_z
 
-                gyro_y = query_entry['Pitch rate[°/s]'] / 180.0 * 3.1415926
+                gyro_y = float(query_entry['Pitch rate[°/s]']) / 180.0 * 3.1415926
                 gyro_y_mean += gyro_y
 
-                gyro_x = query_entry['Roll rate[°/s]'] / 180.0 * 3.1415926
+                gyro_x = float(query_entry['Roll rate[°/s]']) / 180.0 * 3.1415926
                 gyro_x_mean += gyro_x
 
-                acc_x = query_entry['Acceleration-x[m/s2]']
+                acc_x = float(query_entry['Acceleration-x[m/s2]'])
                 acc_x_mean += acc_x
 
-                acc_y = query_entry['Acceleration-y[m/s2]']
+                acc_y = float(query_entry['Acceleration-y[m/s2]'])
                 acc_y_mean += acc_y
 
-                acc_z = query_entry['Acceleration-z[m/s2]']
+                acc_z = float(query_entry['Acceleration-z[m/s2]'])
                 acc_z_mean += acc_z
 
             imu_count = end_index - start_index

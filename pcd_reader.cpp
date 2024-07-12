@@ -161,7 +161,7 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
     pcl::copyPointCloud(*source_points, *height_filtered);
 
     std::copy_if(height_filtered->begin(), height_filtered->end(), std::back_inserter(filtered->points), [&](const pcl::PointXYZI& p) {
-      return p.z < 0.5;
+      return std::fabs(p.z) < 0.5;
     });
 
     filtered->width = filtered->size();
