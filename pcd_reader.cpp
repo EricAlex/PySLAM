@@ -161,7 +161,7 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
     pcl::copyPointCloud(*source_points, *height_filtered);
 
     std::copy_if(height_filtered->begin(), height_filtered->end(), std::back_inserter(filtered->points), [&](const pcl::PointXYZI& p) {
-      return p.z < 0.5;
+      return std::fabs(p.z) < 0.5;
     });
 
     filtered->width = filtered->size();
@@ -833,6 +833,7 @@ void generate_2d_map(const std::string &pcd_filename,
     }
     std::vector<std::vector<float>> ground_grid(grid_height, std::vector<float>(grid_width, 0.0));
     std::vector<std::vector<float>> ground_height_grid(grid_height, std::vector<float>(grid_width, nanValue));
+    std::vector<std::vector<float>> mirror_grid(grid_height, std::vector<float>(grid_width, nanValue));
     std::vector<std::vector<size_t>> ground_height_grid_c(grid_height, std::vector<size_t>(grid_width, 0));
     size_t valid_pixel_idx(0);
     for (const auto& point : ground_cloud->points) {
@@ -849,10 +850,33 @@ void generate_2d_map(const std::string &pcd_filename,
             }
             if(isnan(ground_height_grid[y_index][x_index])){
                 ground_height_grid[y_index][x_index] = point.z;
+                mirror_grid[y_index][x_index] = point.z;
             }else{
                 ground_height_grid[y_index][x_index] = (ground_height_grid_c[y_index][x_index]*ground_height_grid[y_index][x_index] + point.z)/(ground_height_grid_c[y_index][x_index]+1);
+                mirror_grid[y_index][x_index] = (ground_height_grid_c[y_index][x_index]*ground_height_grid[y_index][x_index] + point.z)/(ground_height_grid_c[y_index][x_index]+1);
             }
             ground_height_grid_c[y_index][x_index]++;
+        }
+    }
+    int index_range = int(1.0 / grid_resolution);
+    for (int i = 0; i < grid_height; ++i) {
+        for (int j = 0; j < grid_width; ++j) {
+            if (isnan(mirror_grid[i][j])) {
+                float min_dist = 10000;
+                for (int m = -1.0 * index_range; m <= index_range; ++m) {
+                    for (int n = -1.0 * index_range; n <= index_range; ++n) {
+                        if ((i + m) >= 0 && (i + m) < grid_height && (j + n) >= 0 && (j + n) < grid_width) {
+                            if (!isnan(mirror_grid[i + m][j + n])) {
+                                float dist = std::sqrt(std::pow(m, 2) + std::pow(n, 2));
+                                if (min_dist > dist) {
+                                    min_dist = dist;
+                                    ground_height_grid[i][j] = mirror_grid[i + m][j + n];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     cv::Mat ground_intensity_mat = stretchContrast98_float(ground_grid, valid_pixel_idx, 0.03);
@@ -931,7 +955,6 @@ void generate_2d_map(const std::string &pcd_filename,
         return;
     }
 }
-
 py::tuple performNDT(py::array_t<float> &source_array,
                      py::array_t<float> &target_array,
                      py::array_t<double> &init_mat,
