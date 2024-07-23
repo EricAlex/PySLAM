@@ -303,6 +303,24 @@ def alignSections(target_poses, target_pc_paths, target_idx, source_poses, sourc
         coord_to_stack.append(out_coord)
     source_coords = np.vstack(coord_to_stack)
 
+    PGM = PoseGraphManager()
+    PGM.addPriorFactor()
+    ResultSaver = PoseGraphResultSaver(init_pose=PGM.curr_se3, 
+                                       save_gap=(len(target_pc_paths)-1),
+                                       num_frames=len(target_pc_paths),
+                                       seq_idx=target_idx,
+                                       save_dir="Dummy_dir")
+    for for_idx, mat in enumerate(target_matrices):
+        PGM.curr_node_idx = for_idx
+        if(PGM.curr_node_idx == 0):
+            PGM.prev_node_idx = PGM.curr_node_idx
+            continue
+        PGM.curr_se3 = mat
+        PGM.addOdometryFactor(np.linalg.inv(target_matrices[for_idx-1]) @ mat)
+        PGM.prev_node_idx = PGM.curr_node_idx
+        if for_idx != (len(target_matrices)-1):
+            ResultSaver.saveUnoptimizedPoseGraphResultNoWrite(PGM.curr_se3, PGM.curr_node_idx)
+
     c_d_th = 0.8
     final_transformation, has_converged, fitness_score = imo_pcd_reader.performNDT(source_coords, target_coords, target_matrices[-1], 0.2, 0.4, 0.01, 0.1, 50)
     if fitness_score > c_d_th:
@@ -323,7 +341,15 @@ def alignSections(target_poses, target_pc_paths, target_idx, source_poses, sourc
                                                             max_correspondence_distance = max_c_d,
                                                             init = final_transformation
                                                             )
-    return reg_p2p.transformation
+    PGM.addLoopFactor(np.linalg.inv(target_matrices[-1]) @ reg_p2p.transformation, len(target_matrices)-1)
+    PGM.optimizePoseGraph()
+    ResultSaver.saveOptimizedPoseGraphResultNoWrite(PGM.curr_node_idx, PGM.graph_optimized)
+
+    ResultSaver.saveUnoptimizedPoseGraphResultNoWrite(reg_p2p.transformation, PGM.curr_node_idx)
+
+    outPoseList = ResultSaver.getPoseList()
+    target_poses[:-1,:] = outPoseList[:-1,:]
+    return outPoseList
 
 idx = -1
 
@@ -366,14 +392,14 @@ for scan_paths in pcd_segments:
             with parallel_backend('loky'): sec_results = Parallel(n_jobs=max(1, multiprocessing.cpu_count()-1))(delayed(alignSections)(result, sec_paths, for_idx, results[for_idx+1], sec_scan_paths[for_idx+1], for_idx+1) 
                                                 for for_idx, (result, sec_paths) in enumerate(zip(results[:-1], sec_scan_paths[:-1])))
             
-            pose_list_to_stack = [results[0][:-1,:]]
+            pose_list_to_stack = [sec_results[0][:-1,:]]
             sec_comb_trans = np.eye(4)
-            for for_idx, sec_comb in enumerate(sec_results):
-                sec_comb_trans = sec_comb_trans.dot(sec_comb)
+            for for_idx, sec_opt in enumerate(sec_results):
+                sec_comb_trans = sec_comb_trans.dot(sec_opt[-1,:].reshape(4, 4))
                 if for_idx == (len(sec_results)-1):
                     tmp_sec_pose = results[for_idx+1]
                 else:
-                    tmp_sec_pose = results[for_idx+1][:-1,:]
+                    tmp_sec_pose = sec_results[for_idx+1][:-1,:]
                 tmp_list = np.ones(tmp_sec_pose.shape)
                 for i in range(tmp_sec_pose.shape[0]):
                     tmp_list[i] = sec_comb_trans.dot(tmp_sec_pose[i].reshape(4, 4)).flatten()

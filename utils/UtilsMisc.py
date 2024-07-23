@@ -63,7 +63,7 @@ def saveOptimizedGraphPose(curr_node_idx, graph_optimized, filename):
         optimized_pose_ith = np.array([ pose_rot[0], pose_rot[1], pose_rot[2], pose_trans[0], 
                                         pose_rot[3], pose_rot[4], pose_rot[5], pose_trans[1], 
                                         pose_rot[6], pose_rot[7], pose_rot[8], pose_trans[2],
-                                        0.0, 0.0, 0.0, 0.1 ])
+                                        0.0, 0.0, 0.0, 1.0 ])
         if(opt_idx == 0):
             optimized_pose_list = optimized_pose_ith
         else:
@@ -71,6 +71,22 @@ def saveOptimizedGraphPose(curr_node_idx, graph_optimized, filename):
 
     np.savetxt(filename, optimized_pose_list, delimiter=",")
 
+def saveOptimizedGraphPoseNoWrite(curr_node_idx, graph_optimized):
+
+    for opt_idx in range(curr_node_idx):
+        pose_trans, pose_rot = getGraphNodePose(graph_optimized, opt_idx)
+        pose_trans = np.reshape(pose_trans, (-1, 3)).squeeze()
+        pose_rot = np.reshape(pose_rot, (-1, 9)).squeeze()
+        optimized_pose_ith = np.array([ pose_rot[0], pose_rot[1], pose_rot[2], pose_trans[0], 
+                                        pose_rot[3], pose_rot[4], pose_rot[5], pose_trans[1], 
+                                        pose_rot[6], pose_rot[7], pose_rot[8], pose_trans[2],
+                                        0.0, 0.0, 0.0, 1.0 ])
+        if(opt_idx == 0):
+            optimized_pose_list = optimized_pose_ith
+        else:
+            optimized_pose_list = np.vstack((optimized_pose_list, optimized_pose_ith))
+
+    return optimized_pose_list
 
 class PoseGraphResultSaver:
     def __init__(self, init_pose, save_gap, num_frames, seq_idx, save_dir):
@@ -99,6 +115,9 @@ class PoseGraphResultSaver:
     
     def getPoseList(self):
         return self.pose_list
+
+    def saveOptimizedPoseGraphResultNoWrite(self, cur_node_idx, graph_optimized):
+        self.pose_list = saveOptimizedGraphPoseNoWrite(cur_node_idx, graph_optimized)
 
     def saveOptimizedPoseGraphResult(self, cur_node_idx, graph_optimized):
         filename = "pose" + self.seq_idx + "optimized_" + str(getUnixTime()) + ".csv"
