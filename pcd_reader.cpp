@@ -15,6 +15,9 @@
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/sample_consensus/ransac.h>
 #include <pcl/sample_consensus/sac_model_plane.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/common/common.h>
+#include <pcl/console/print.h>
 
 #include <Eigen/Core>
 #include <opencv2/opencv.hpp>
@@ -154,7 +157,49 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
         const typename pcl::PointCloud<PointT>::Ptr&source_points,
         Eigen::Vector4f& floor_coeffs)
 {   
-    float normal_filter_thresh = 20.0, floor_normal_thresh = 10.0;
+    auto compute_coefficients = [&](pcl::PointCloud<pcl::PointXYZI>::Ptr& ground_cloud, 
+                                    pcl::PointCloud<pcl::PointXYZI>::Ptr inlier_cloud,
+                                    Eigen::Vector4f& floor_coeffs) -> bool {
+        if (ground_cloud->points.empty()) {
+            return false;
+        }
+        const double ds_resolution = 0.2;
+        std::map<int, std::map<int, std::vector<pcl::PointXYZI>>> grid;
+        pcl::PointCloud<pcl::PointXYZI>::Ptr ds_cloud(new pcl::PointCloud<pcl::PointXYZI>());
+        for (const auto& point : ground_cloud->points) {
+            if (std::fabs(point.z) < 0.2 && point.intensity < 30) { // downsample to filter noise
+                int grid_x = static_cast<int>(point.x / ds_resolution);
+                int grid_y = static_cast<int>(point.y / ds_resolution);
+                if (grid[grid_x][grid_y].empty()) {
+                    grid[grid_x][grid_y].push_back(point);
+                    ds_cloud->points.emplace_back(point);
+                }
+            }
+        }
+        pcl::SACSegmentation<pcl::PointXYZI> seg;
+        pcl::PointIndices::Ptr inliers (new pcl::PointIndices);
+        pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients);
+        seg.setOptimizeCoefficients (true);
+        seg.setModelType (pcl::SACMODEL_PLANE);
+        seg.setMethodType (pcl::SAC_RANSAC);
+        seg.setMaxIterations (100);
+        seg.setDistanceThreshold (0.1);
+        seg.setInputCloud (ds_cloud);
+        seg.segment (*inliers, *coefficients);
+        if (inliers->indices.size () == 0) {
+            return false;
+        }
+        floor_coeffs = Eigen::Vector4f(coefficients->values[0],
+                                        coefficients->values[1],
+                                        coefficients->values[2],
+                                        coefficients->values[3]);
+        pcl::ExtractIndices<pcl::PointXYZI> extract;
+        extract.setInputCloud(ds_cloud);
+        extract.setIndices(inliers);
+        extract.setNegative (true);
+        extract.filter(*inlier_cloud);
+        return true;                                        
+    };
     
     pcl::PointCloud<pcl::PointXYZI>::Ptr height_filtered(new pcl::PointCloud<pcl::PointXYZI>);
     pcl::PointCloud<pcl::PointXYZI>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZI>);
@@ -168,85 +213,10 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
     filtered->height = 1;
     filtered->is_dense = false;
 
-    pcl::PointCloud<pcl::PointXYZI>::Ptr out_filtered(new pcl::PointCloud<pcl::PointXYZI>);
-    auto normal_filtering = [&](const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) -> pcl::PointCloud<pcl::PointXYZI>::Ptr {
-        pcl::NormalEstimation<pcl::PointXYZI, pcl::Normal> ne;
-        ne.setInputCloud(cloud);
-
-        pcl::search::KdTree<pcl::PointXYZI>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZI>);
-        ne.setSearchMethod(tree);
-
-        pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>);
-        ne.setKSearch(10);
-        ne.setViewPoint(0.0f, 0.0f, 1.0f);
-        ne.compute(*normals);
-
-        pcl::PointCloud<pcl::PointXYZI>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZI>);
-        filtered->reserve(cloud->size());
-
-        for(int i = 0; i < cloud->size(); i++) {
-            float dot = normals->at(i).getNormalVector3fMap().normalized().dot(Eigen::Vector3f::UnitZ());
-            if(std::abs(dot) > std::cos(normal_filter_thresh * M_PI / 180.0)) {
-                filtered->push_back(cloud->at(i));
-            } else {
-                out_filtered->points.emplace_back(cloud->at(i));
-            }
-        }
-
-        filtered->width = filtered->size();
-        filtered->height = 1;
-        filtered->is_dense = false;
-        return filtered;
-    };
-    typename pcl::PointCloud<PointT>::Ptr result_cloud(new pcl::PointCloud<PointT>);
-    filtered = normal_filtering(filtered);
-    if (filtered->points.size() < 10) {
-        return result_cloud;
-    }
-    // RANSAC
-    pcl::SampleConsensusModelPlane<pcl::PointXYZI>::Ptr model_p(new pcl::SampleConsensusModelPlane<pcl::PointXYZI>(filtered));
-    pcl::RandomSampleConsensus<pcl::PointXYZI> ransac(model_p);
-    ransac.setDistanceThreshold(0.2);
-    ransac.computeModel();
-
-    pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
-    ransac.getInliers(inliers->indices);
-    // verticality check of the detected floor's normal
-    Eigen::Vector4f reference = Eigen::Vector4f::UnitZ();
-
-    Eigen::VectorXf coeffs;
-    ransac.getModelCoefficients(coeffs);
-
     pcl::PointCloud<pcl::PointXYZI>::Ptr inlier_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-    pcl::PointCloud<pcl::PointXYZI>::Ptr outlier_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-    double dot = coeffs.head<3>().dot(reference.head<3>());
+    compute_coefficients(filtered, inlier_cloud, floor_coeffs);
 
-    if(std::abs(dot) < std::cos(floor_normal_thresh * M_PI / 180.0)) {
-        // the normal is not vertical
-        return result_cloud;
-    }
-    // make the normal upward
-    if(coeffs.head<3>().dot(Eigen::Vector3f::UnitZ()) < 0.0f) {
-      coeffs *= -1.0f;
-    }
-    pcl::ExtractIndices<pcl::PointXYZI> extract;
-    extract.setInputCloud(filtered);
-    extract.setIndices(inliers);
-    extract.setNegative (true);
-    extract.filter(*inlier_cloud);
-    floor_coeffs = Eigen::Vector4f(coeffs);
-
-    extract.setInputCloud(filtered);
-    extract.setIndices(inliers);
-    extract.setNegative (false);
-    extract.filter(*outlier_cloud);
-
-    #if DEBUG_MODE
-        std::cout << "ransac points size: " << inlier_cloud->points.size() << std::endl;
-    #endif
-    
-    *out_filtered += *outlier_cloud;
-    if (!out_filtered->points.empty() && !inlier_cloud->points.empty()) {
+    if (!filtered->points.empty() && !inlier_cloud->points.empty()) {
         auto point_to_plane_dist = [&](double x, double y, double z, const Eigen::Vector4f& floor_coeffs) -> float {
             float a = floor_coeffs[0];
             float b = floor_coeffs[1];
@@ -254,32 +224,15 @@ typename pcl::PointCloud<PointT>::Ptr ground_plane_fitting(
             float d = floor_coeffs[3];
             return (a * x + b * y + c * z + d) / std::sqrt(a * a + b * b + c * c);
         };
-        std::vector<float> distances;
-        for (auto &p : inlier_cloud->points) {
-            float dist = point_to_plane_dist(p.x, p.y, p.z, floor_coeffs);
-            distances.emplace_back(dist);
-        }
-        float mean = std::accumulate(distances.begin(), distances.end(), 0.0) / distances.size();
-        float sum_of_squares = std::accumulate(distances.begin(), distances.end(), 0.0,
-            [&mean](double sum, double val) {
-                return sum + std::pow(val - mean, 2);
-            }
-        );
-        float variance = sum_of_squares / distances.size();
-        float sigma = std::sqrt(variance);
-        #if DEBUG_MODE
-            std::cout << "sigma: " << sigma << std::endl;
-        #endif
-        for (auto &p : out_filtered->points) {
+
+        for (auto &p : filtered->points) {
             auto dist = point_to_plane_dist(p.x, p.y, p.z, floor_coeffs);
-            if (std::fabs(dist) <= 0.2) {
+            if (std::fabs(dist) <= 0.1) {
                 inlier_cloud->points.emplace_back(p);
             }
         }
     }
-    #if DEBUG_MODE
-        std::cout << "result cloud points size: " << inlier_cloud->points.size() << std::endl;
-    #endif
+    typename pcl::PointCloud<PointT>::Ptr result_cloud(new pcl::PointCloud<PointT>);
     pcl::copyPointCloud(*inlier_cloud, *result_cloud);
     return result_cloud;
 }
@@ -831,7 +784,7 @@ void generate_2d_map(const std::string &pcd_filename,
         throw std::runtime_error("无法读取PCD文件, 请检查路径! " + ground_map_file);
         return;
     }
-    std::vector<std::vector<float>> ground_grid(grid_height, std::vector<float>(grid_width, 0.0));
+    std::vector<std::vector<float>> ground_intensity_grid(grid_height, std::vector<float>(grid_width, 0.0));
     std::vector<std::vector<float>> ground_height_grid(grid_height, std::vector<float>(grid_width, nanValue));
     std::vector<std::vector<float>> mirror_grid(grid_height, std::vector<float>(grid_width, nanValue));
     std::vector<std::vector<size_t>> ground_height_grid_c(grid_height, std::vector<size_t>(grid_width, 0));
@@ -841,12 +794,12 @@ void generate_2d_map(const std::string &pcd_filename,
         int x_index = int((point.y - min_y) / grid_resolution);
         // Check if the indices are within the grid bounds
         if (x_index >= 0 && x_index < grid_width && y_index >= 0 && y_index < grid_height) {
-            if(ground_grid[y_index][x_index]==0.0){
+            if(ground_intensity_grid[y_index][x_index]==0.0){
                 valid_pixel_idx++;
-                ground_grid[y_index][x_index] = point.intensity;
+                ground_intensity_grid[y_index][x_index] = point.intensity;
             }else{
-                ground_grid[y_index][x_index] = std::max(ground_grid[y_index][x_index], point.intensity);
-                // ground_grid[y_index][x_index] = 0.5 * (ground_grid[y_index][x_index] + point.intensity);
+                ground_intensity_grid[y_index][x_index] = std::max(ground_intensity_grid[y_index][x_index], point.intensity);
+                // ground_intensity_grid[y_index][x_index] = 0.5 * (ground_intensity_grid[y_index][x_index] + point.intensity);
             }
             if(isnan(ground_height_grid[y_index][x_index])){
                 ground_height_grid[y_index][x_index] = point.z;
@@ -858,28 +811,135 @@ void generate_2d_map(const std::string &pcd_filename,
             ground_height_grid_c[y_index][x_index]++;
         }
     }
-    int index_range = int(1.0 / grid_resolution);
-    for (int i = 0; i < grid_height; ++i) {
-        for (int j = 0; j < grid_width; ++j) {
-            if (isnan(mirror_grid[i][j])) {
-                float min_dist = 10000;
-                for (int m = -1.0 * index_range; m <= index_range; ++m) {
-                    for (int n = -1.0 * index_range; n <= index_range; ++n) {
-                        if ((i + m) >= 0 && (i + m) < grid_height && (j + n) >= 0 && (j + n) < grid_width) {
-                            if (!isnan(mirror_grid[i + m][j + n])) {
-                                float dist = std::sqrt(std::pow(m, 2) + std::pow(n, 2));
-                                if (min_dist > dist) {
-                                    min_dist = dist;
-                                    ground_height_grid[i][j] = mirror_grid[i + m][j + n];
-                                }
-                            }
+
+    auto compute_coefficients = [&](pcl::PointCloud<pcl::PointXYZI>::Ptr& ground_cloud, 
+                                Eigen::Vector4f& floor_coeffs) -> bool {
+        pcl::SACSegmentation<pcl::PointXYZI> seg;
+        pcl::PointIndices::Ptr inliers (new pcl::PointIndices);
+        pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients);
+        seg.setOptimizeCoefficients (true);
+        seg.setModelType (pcl::SACMODEL_PLANE);
+        seg.setMethodType (pcl::SAC_RANSAC);
+        seg.setMaxIterations (100);
+        seg.setDistanceThreshold (0.1);
+        seg.setInputCloud (ground_cloud);
+        seg.segment (*inliers, *coefficients);
+        if (inliers->indices.size () == 0) {
+            return false;
+        }
+        floor_coeffs = Eigen::Vector4f(coefficients->values[0],
+                                        coefficients->values[1],
+                                        coefficients->values[2],
+                                        coefficients->values[3]);
+        return true;                                        
+    };
+
+    PointMAP minPt, maxPt;
+    pcl::getMinMax3D(*ground_cloud, minPt, maxPt);
+    int x_index_upper = std::min(int((maxPt.x - min_x) / grid_resolution), grid_height);
+    int x_index_lower = std::max(int((minPt.x - min_x) / grid_resolution), 0);
+    int y_index_upper = std::min(int((maxPt.y - min_y) / grid_resolution), grid_width);
+    int y_index_lower = std::max(int((minPt.y - min_y) / grid_resolution), 0);
+
+    const int block_size = int(30 / grid_resolution);
+    const int block_extension = int(1 / 3 * block_size);
+    const int valid_count = 100;
+    int num_blocks_x = (x_index_upper - x_index_lower) / block_size + 1;
+    int num_blocks_y = (y_index_upper - y_index_lower) / block_size + 1;
+    std::vector<std::vector<Eigen::Vector4f>> block_floor_coeffs(num_blocks_x, std::vector<Eigen::Vector4f>(num_blocks_y, Eigen::Vector4f::Zero()));
+    for (int block_i = 0; block_i < num_blocks_x; ++block_i) {
+        for (int block_j = 0; block_j < num_blocks_y; ++block_j) {
+            pcl::PointCloud<pcl::PointXYZI>::Ptr block_cloud(new pcl::PointCloud<pcl::PointXYZI>);
+            int ex_x_idx_lower = std::max(x_index_lower + block_i * block_size - block_extension, 0);
+            int ex_x_idx_upper = std::min((block_i + 1) * block_size + block_extension, x_index_upper);
+            int ex_y_idx_lower = std::max(y_index_lower + block_j * block_size - block_extension, 0);
+            int ex_y_idx_upper = std::min((block_j + 1) * block_size + block_extension, y_index_upper);
+            for (int i = ex_x_idx_lower; i < ex_x_idx_upper; ++i) {
+                for (int j = ex_y_idx_lower; j < ex_y_idx_upper; ++j) {
+                    if(!isnan(ground_height_grid[i][j])){
+                        pcl::PointXYZI p;
+                        p.x = i + 0.5;
+                        p.y = j + 0.5;
+                        p.z = ground_height_grid[i][j];
+                        p.intensity = ground_intensity_grid[i][j];
+                        block_cloud->points.emplace_back(p);
+                    }
+                }
+            }
+            if (block_cloud->points.size() <= valid_count) { //extension range
+                block_cloud->points.clear();
+                int new_block_extension = int(1 / 2 * block_size);
+                ex_x_idx_lower = std::max(x_index_lower + block_i * block_size - new_block_extension, 0);
+                ex_x_idx_upper = std::min((block_i + 1) * block_size + new_block_extension, x_index_upper);
+                ex_y_idx_lower = std::max(y_index_lower + block_j * block_size - new_block_extension, 0);
+                ex_y_idx_upper = std::min((block_j + 1) * block_size + new_block_extension, y_index_upper);
+                for (int i = ex_x_idx_lower; i < ex_x_idx_upper; ++i) {
+                    for (int j = ex_y_idx_lower; j < ex_y_idx_upper; ++j) {
+                        if(!isnan(ground_height_grid[i][j])){
+                            pcl::PointXYZI p;
+                            p.x = i + 0.5;
+                            p.y = j + 0.5;
+                            p.z = ground_height_grid[i][j];
+                            p.intensity = ground_intensity_grid[i][j];
+                            block_cloud->points.emplace_back(p);
                         }
                     }
                 }
             }
+            if (block_cloud->points.size() <= valid_count) {
+                continue;
+            }
+            Eigen::Vector4f floor_coeffs = Eigen::Vector4f::Zero();
+            bool result = compute_coefficients(block_cloud, floor_coeffs);
+            block_floor_coeffs[block_i][block_j] = floor_coeffs;
+        } 
+    }
+    
+    for (int i = x_index_lower; i < x_index_upper; ++i) {
+        for (int j = y_index_lower; j < y_index_upper; ++j) {
+            int block_x = int((i - x_index_lower) / block_size);
+            int block_y = int((j - y_index_lower) / block_size);
+            Eigen::Vector4f floor_coeffs = block_floor_coeffs[block_x][block_y];
+            if (floor_coeffs.isZero()) {
+                if ((block_x - 1) >= 0 && !block_floor_coeffs[block_x - 1][block_y].isZero()) {
+                    floor_coeffs = block_floor_coeffs[block_x - 1][block_y];
+                } else if ((block_x + 1) < num_blocks_x && !block_floor_coeffs[block_x + 1][block_y].isZero()) {
+                    floor_coeffs = block_floor_coeffs[block_x + 1][block_y];
+                } else if ((block_y - 1) >= 0 && !block_floor_coeffs[block_x][block_y - 1].isZero()) {
+                    floor_coeffs = block_floor_coeffs[block_x][block_y - 1];
+                } else if ((block_y + 1) < num_blocks_y && !block_floor_coeffs[block_x][block_y + 1].isZero()) {
+                    floor_coeffs = block_floor_coeffs[block_x][block_y + 1];
+                }
+            }
+            if (!floor_coeffs.isZero()) {
+                float x = i + 0.5;
+                float y = j + 0.5;
+                float a = floor_coeffs[0];
+                float b = floor_coeffs[1];
+                float c = floor_coeffs[2];
+                float d = floor_coeffs[3];
+                float region_z = -1.0 * (a * x + b * y + d) / c;
+                // float region_z = std::fabs(a * point.x + b * point.y + c * point.z + d) / std::sqrt(a * a + b * b + c * c);
+                ground_height_grid[i][j] = region_z;
+            }
         }
     }
-    cv::Mat ground_intensity_mat = stretchContrast98_float(ground_grid, valid_pixel_idx, 0.03);
+    
+    pcl::PointCloud<pcl::PointXYZI>::Ptr height_cloud(new pcl::PointCloud<pcl::PointXYZI>);
+    for (int i = 0; i < grid_height; ++i) {
+        for (int j = 0; j < grid_width; ++j) {
+            pcl::PointXYZI p;
+            p.x = i;
+            p.y = j;
+            p.z = ground_height_grid[i][j];
+            p.intensity = ground_intensity_grid[i][j] + 50;
+            height_cloud->points.emplace_back(p);
+        }
+    }
+    //std::string name = height_data + ".pcd";
+    //pcl::io::savePCDFileBinary(name, *height_cloud);
+
+    cv::Mat ground_intensity_mat = stretchContrast98_float(ground_intensity_grid, valid_pixel_idx, 0.03);
     cv::Mat colormapped_ground_intensity;
     cv::applyColorMap(ground_intensity_mat, colormapped_ground_intensity, cv::COLORMAP_PARULA);
 
