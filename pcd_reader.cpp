@@ -841,8 +841,8 @@ void generate_2d_map(const std::string &pcd_filename,
     int y_index_upper = std::min(int((maxPt.y - min_y) / grid_resolution), grid_width);
     int y_index_lower = std::max(int((minPt.y - min_y) / grid_resolution), 0);
 
-    const int block_size = int(30 / grid_resolution);
-    const int block_extension = int(1 / 3 * block_size);
+    int block_size = int(30.0 / grid_resolution);
+    int block_extension = int(1.0 / 3.0 * block_size);
     const int valid_count = 100;
     int num_blocks_x = (x_index_upper - x_index_lower) / block_size + 1;
     int num_blocks_y = (y_index_upper - y_index_lower) / block_size + 1;
@@ -851,9 +851,9 @@ void generate_2d_map(const std::string &pcd_filename,
         for (int block_j = 0; block_j < num_blocks_y; ++block_j) {
             pcl::PointCloud<pcl::PointXYZI>::Ptr block_cloud(new pcl::PointCloud<pcl::PointXYZI>);
             int ex_x_idx_lower = std::max(x_index_lower + block_i * block_size - block_extension, 0);
-            int ex_x_idx_upper = std::min((block_i + 1) * block_size + block_extension, x_index_upper);
+            int ex_x_idx_upper = std::min(x_index_lower + (block_i + 1) * block_size + block_extension, x_index_upper);
             int ex_y_idx_lower = std::max(y_index_lower + block_j * block_size - block_extension, 0);
-            int ex_y_idx_upper = std::min((block_j + 1) * block_size + block_extension, y_index_upper);
+            int ex_y_idx_upper = std::min(y_index_lower + (block_j + 1) * block_size + block_extension, y_index_upper);
             for (int i = ex_x_idx_lower; i < ex_x_idx_upper; ++i) {
                 for (int j = ex_y_idx_lower; j < ex_y_idx_upper; ++j) {
                     if(!isnan(ground_height_grid[i][j])){
@@ -868,11 +868,11 @@ void generate_2d_map(const std::string &pcd_filename,
             }
             if (block_cloud->points.size() <= valid_count) { //extension range
                 block_cloud->points.clear();
-                int new_block_extension = int(1 / 2 * block_size);
+                int new_block_extension = int(0.5 * block_size);
                 ex_x_idx_lower = std::max(x_index_lower + block_i * block_size - new_block_extension, 0);
-                ex_x_idx_upper = std::min((block_i + 1) * block_size + new_block_extension, x_index_upper);
+                ex_x_idx_upper = std::min(x_index_lower + (block_i + 1) * block_size + new_block_extension, x_index_upper);
                 ex_y_idx_lower = std::max(y_index_lower + block_j * block_size - new_block_extension, 0);
-                ex_y_idx_upper = std::min((block_j + 1) * block_size + new_block_extension, y_index_upper);
+                ex_y_idx_upper = std::min(y_index_lower + (block_j + 1) * block_size + new_block_extension, y_index_upper);
                 for (int i = ex_x_idx_lower; i < ex_x_idx_upper; ++i) {
                     for (int j = ex_y_idx_lower; j < ex_y_idx_upper; ++j) {
                         if(!isnan(ground_height_grid[i][j])){
