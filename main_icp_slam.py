@@ -144,7 +144,7 @@ for index, scene_n in enumerate(scene_names):
             tmp_seg = []
 
 parent_base_dir = os.path.abspath(os.path.join(args.data_base_dir, os.pardir))
-pose = IMU.IMUPose(os.path.join(parent_base_dir, "IMU.csv"))
+pose = IMU.IMUPose(os.path.join(parent_base_dir, args.IMU_dir))
 
 # Check IMU
 logging.info(f">>>>>>>>>>>>>>>> Cheking IMU data coverage >>>>>>>>>>>>>>>>")
@@ -242,13 +242,6 @@ def subMap(scan_paths, seg_idx):
                         logger.warning(f"seg_idx: {seg_idx}, idx: {for_idx}, fitness_score too high {fitness_score}, maybe GPS is unreliable, lidar odometry recalculated fitness_score: {odom_fitness_score}")
                         final_transformation = odom_final_transformation
                         fitness_score = odom_fitness_score
-            # fitness_score = None
-            # if pose_trans is not None:
-            #     final_transformation = pose_trans
-            #     fitness_score = 0.01
-            # if fitness_score is None:
-            #     final_transformation, has_converged, fitness_score = imo_pcd_reader.performNDT(curr_scan_pts, prev_scan_pts, icp_initial, 0.2, 0.4, 0.01, 0.1, 50)
-            #     logger.warning(f"seg_idx: {seg_idx}, idx: {for_idx}, No GPS IMU info, use lidar odometry. fitness_score: {fitness_score}")
 
         if 2*fitness_score > c_d_th:
             max_c_d = c_d_th
@@ -399,8 +392,8 @@ for scan_paths in pcd_segments:
                     sec_e = (sec+1)*smf+1
                 sec_scan_paths.append(scan_paths[sec_s:sec_e])
         
-            with parallel_backend('loky'): results = Parallel(n_jobs=max(1, multiprocessing.cpu_count()-1))(delayed(subMap)(sec_paths, for_idx) for for_idx, sec_paths in enumerate(sec_scan_paths))
-            with parallel_backend('loky'): sec_results = Parallel(n_jobs=max(1, multiprocessing.cpu_count()-1))(delayed(alignSections)(result, sec_paths, for_idx, results[for_idx+1], sec_scan_paths[for_idx+1], for_idx+1) 
+            with parallel_backend('loky'): results = Parallel(n_jobs=max(1, int(multiprocessing.cpu_count()/2)))(delayed(subMap)(sec_paths, for_idx) for for_idx, sec_paths in enumerate(sec_scan_paths))
+            with parallel_backend('loky'): sec_results = Parallel(n_jobs=max(1, int(multiprocessing.cpu_count()/2)))(delayed(alignSections)(result, sec_paths, for_idx, results[for_idx+1], sec_scan_paths[for_idx+1], for_idx+1) 
                                                 for for_idx, (result, sec_paths) in enumerate(zip(results[:-1], sec_scan_paths[:-1])))
             
             pose_list_to_stack = [sec_results[0][:-1,:]]
