@@ -410,6 +410,138 @@ for scan_paths in pcd_segments:
                 pose_list_to_stack.append(tmp_list)
             
             final_pose_list = np.vstack(pose_list_to_stack)
+
+            # Loop optimization
+            loop_grid_res = 20 # meter
+            height_diff_th = 1.5 # meter
+            idx_min_leap_th = 200 # frames
+            try_gap_loop_detection = 5 # frames
+            stack_frames_range = 10 # frames
+            excluded_area = np.array([[-1.12, 3.863], [-1.1, 1.1]])
+            ceiling_height = 100
+            read_ratio = 2.0/stack_frames_range
+            PGM = PoseGraphManager()
+            PGM.addPriorFactor()
+            full_pose_num = final_pose_list.shape[0]
+            ResultSaver = PoseGraphResultSaver(init_pose=PGM.curr_se3, 
+                                            save_gap=(full_pose_num-1),
+                                            num_frames=full_pose_num,
+                                            seq_idx=0,
+                                            save_dir="Dummy_dir")
+            full_matrices = [final_pose_list[i].reshape(4, 4) for i in range(final_pose_list.shape[0])]
+            full_max_idx = len(full_matrices) - 1
+            grid_idx_map = {}
+            last_detected_loop_idx = 0
+            for for_idx, mat in enumerate(full_matrices):
+                PGM.curr_node_idx = for_idx
+                if(PGM.curr_node_idx == 0):
+                    PGM.prev_node_idx = PGM.curr_node_idx
+                    continue
+                PGM.curr_se3 = PGM.curr_se3 @ (np.linalg.inv(full_matrices[for_idx-1]) @ mat)
+                PGM.addOdometryFactor(np.linalg.inv(full_matrices[for_idx-1]) @ mat)
+                PGM.prev_node_idx = PGM.curr_node_idx
+                grid_x = int(mat[0, -1]/loop_grid_res)
+                grid_y = int(mat[1, -1]/loop_grid_res)
+                if (grid_x, grid_y) not in grid_idx_map:
+                    grid_idx_map[(grid_x, grid_y)] = []
+                else:
+                    if for_idx % try_gap_loop_detection == 0 and for_idx-last_detected_loop_idx > idx_min_leap_th:
+                        dist_min = 1e5
+                        last_idx = for_idx
+                        tmp_idx_list = copy.deepcopy(grid_idx_map[(grid_x, grid_y)])
+                        elem_compare = for_idx
+                        while True:
+                            if abs(tmp_idx_list[-1] - elem_compare) < idx_min_leap_th:
+                                elem_compare = tmp_idx_list[-1]
+                                del tmp_idx_list[-1]
+                                if len(tmp_idx_list) == 0:
+                                    break
+                            else:
+                                break
+                        for tmp_idx in tmp_idx_list:
+                            dist = math.sqrt((full_matrices[tmp_idx][0, -1]-mat[0, -1])**2 + (full_matrices[tmp_idx][1, -1]-mat[1, -1])**2)
+                            if for_idx-tmp_idx > idx_min_leap_th and dist < dist_min:
+                                dist_min = dist
+                                last_idx = tmp_idx
+                        if for_idx-last_idx > idx_min_leap_th and math.fabs(mat[2, -1]-full_matrices[last_idx][2, -1]) < height_diff_th:
+                            logging.info(f"Loop detected between frame {last_idx} and frame {for_idx}, optimizing...")
+                            last_detected_loop_idx = for_idx
+
+                            coord_to_stack = []
+                            for stack_idx in range(max(0, last_idx-stack_frames_range), min(full_max_idx, last_idx+stack_frames_range), 2):
+                                scan = imo_pcd_reader.read_pcd_with_excluded_area_read_ratio(scan_paths[stack_idx], excluded_area, ceiling_height, read_ratio)
+                                coord = scan[:, :3]
+                                new_column = np.ones((coord.shape[0], 1))
+                                aug_coord = np.hstack((coord, new_column))
+                                stack_mat = np.linalg.inv(full_matrices[last_idx]) @ full_matrices[stack_idx]
+                                trans_coord = stack_mat.dot(aug_coord.T)
+                                out_coord = trans_coord.T[:, :3]
+                                coord_to_stack.append(out_coord)
+                            target_coords = np.vstack(coord_to_stack)
+                            
+                            coord_to_stack = []
+                            for stack_idx in range(max(0, for_idx-stack_frames_range), min(full_max_idx, for_idx+stack_frames_range), 2):
+                                scan = imo_pcd_reader.read_pcd_with_excluded_area_read_ratio(scan_paths[stack_idx], excluded_area, ceiling_height, read_ratio)
+                                coord = scan[:, :3]
+                                new_column = np.ones((coord.shape[0], 1))
+                                aug_coord = np.hstack((coord, new_column))
+                                stack_mat = np.linalg.inv(mat) @ full_matrices[stack_idx]
+                                trans_coord = stack_mat.dot(aug_coord.T)
+                                out_coord = trans_coord.T[:, :3]
+                                coord_to_stack.append(out_coord)
+                            source_coords = np.vstack(coord_to_stack)
+
+                            init_pose = np.linalg.inv(full_matrices[last_idx]) @ mat
+                            c_d_th = 0.8
+                            final_transformation, has_converged, fitness_score = imo_pcd_reader.performNDT(source_coords, target_coords, init_pose, 0.2, 0.4, 0.01, 0.1, 50)
+                            if 2*fitness_score > c_d_th:
+                                max_c_d = c_d_th
+                            else:
+                                max_c_d = 2*fitness_score
+                            
+                            source = o3d.geometry.PointCloud()
+                            source.points = o3d.utility.Vector3dVector(source_coords)
+
+                            target = o3d.geometry.PointCloud()
+                            target.points = o3d.utility.Vector3dVector(target_coords)
+
+                            reg_p2p = o3d.pipelines.registration.registration_generalized_icp(source = source, 
+                                                                                    target = target, 
+                                                                                    max_correspondence_distance = max_c_d,
+                                                                                    init = final_transformation
+                                                                                    )
+
+                            # curr_scan_pts = Ptutils.readScan(scan_paths[for_idx])
+                            # curr_scan_down_pts = Ptutils.random_sampling(curr_scan_pts, num_points=args.num_icp_points)
+                            # prev_scan_pts = Ptutils.readScan(scan_paths[last_idx])
+                            # prev_scan_down_pts = Ptutils.random_sampling(prev_scan_pts, num_points=args.num_icp_points)
+                            # source = o3d.geometry.PointCloud()
+                            # source.points = o3d.utility.Vector3dVector(curr_scan_down_pts)
+                            # target = o3d.geometry.PointCloud()
+                            # target.points = o3d.utility.Vector3dVector(prev_scan_down_pts)
+
+                            # init_pose = np.linalg.inv(full_matrices[last_idx]) @ mat
+                            # c_d_th = 0.8
+                            # final_transformation, has_converged, fitness_score = imo_pcd_reader.performNDT(curr_scan_pts, prev_scan_pts, init_pose, 0.2, 0.4, 0.01, 0.1, 50)
+                            # if 2*fitness_score > c_d_th:
+                            #     max_c_d = c_d_th
+                            # else:
+                            #     max_c_d = 2*fitness_score
+                            
+                            # reg_p2p = o3d.pipelines.registration.registration_generalized_icp(source = source, 
+                            #                                                         target = target, 
+                            #                                                         max_correspondence_distance = max_c_d,
+                            #                                                         init = final_transformation
+                            #                                                         )
+
+                            PGM.addLoopFactor(reg_p2p.transformation, last_idx)
+                            PGM.optimizePoseGraph()
+                            ResultSaver.saveOptimizedPoseGraphResultNoWriteOld(PGM.curr_node_idx, PGM.graph_optimized)
+
+                grid_idx_map[(grid_x, grid_y)].append(for_idx)
+                ResultSaver.saveUnoptimizedPoseGraphResultNoWrite(PGM.curr_se3, PGM.curr_node_idx)
+            
+            final_pose_list = ResultSaver.getPoseList()
         
         filename = "pose" + map_idx + "unoptimized.csv"
         filename = os.path.join(save_dir, filename)
