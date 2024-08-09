@@ -946,14 +946,14 @@ void generate_2d_map(const std::string &pcd_filename,
     // (0, 0)
     int center_y_axis = int((0 - min_x) / grid_resolution);
     int center_x_axis = int((0 - min_y) / grid_resolution);
-
-    // (50, 0)
-    int y_axis = int((50 - min_x) / grid_resolution);
+    const int axis_range = 2;
+    // (axis_range, 0)
+    int y_axis = int((axis_range - min_x) / grid_resolution);
     int x_axis = int((0 - min_y) / grid_resolution);
     cv::line(colormapped_ground_intensity, cv::Point(center_x_axis, center_y_axis), cv::Point(x_axis, y_axis), cv::Scalar(0, 0, 255), 4);
-    // (0, 50)
+    // (0, axis_range)
     y_axis = int((0 - min_x) / grid_resolution);
-    x_axis = int((50 - min_y) / grid_resolution);
+    x_axis = int((axis_range - min_y) / grid_resolution);
     cv::line(colormapped_ground_intensity, cv::Point(center_x_axis, center_y_axis), cv::Point(x_axis, y_axis), cv::Scalar(0, 255, 0), 4);
     cv::imwrite(ground_img_intensity, colormapped_ground_intensity);
 
